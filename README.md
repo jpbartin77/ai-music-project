@@ -1,1 +1,1 @@
-# ai-music-project
+# AI Music Project
