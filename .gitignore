@@ -205,3 +205,21 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# API Keys and secrets
+.env
+*.env
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# MIDI data files (can be large)
+data/raw/
+
+# VS Code settings (optional - some people commit these)
+.vscode/
+
+# Windows specific
+Thumbs.db
+desktop.ini
