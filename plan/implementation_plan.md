@@ -128,6 +128,31 @@ python src/piano_roll.py
   - Identify weakest finger per scale
   - Compare left hand vs. right hand evenness
 
+**Progress-over-time queries (priority):**
+The longitudinal view is the most compelling story — a single session is data, but a trend is insight. Build these SPL queries as saved searches and dashboard panels:
+
+```spl
+-- Speed trend per scale over time
+index=edge_hub_mqtt source="piano/sessions"
+| eval scale=json_extract(event, "scale_display")
+| eval rh_bpm=json_extract(event, "metrics.right.speed_bpm")
+| timechart avg(rh_bpm) by scale
+
+-- Evenness improvement over time (lower = better)
+index=edge_hub_mqtt source="piano/sessions"
+| eval cv=json_extract(event, "metrics.right.evenness_cv_pct")
+| timechart avg(cv)
+
+-- Per-finger timing deviation trend (which fingers are getting better?)
+index=edge_hub_mqtt source="piano/notes"
+| eval finger=json_extract(event, "finger")
+| eval time_ms=json_extract(event, "time_ms")
+| stats avg(time_ms) as avg_timing, stdev(time_ms) as timing_stdev by finger, date_hour
+| timechart avg(timing_stdev) by finger
+```
+
+**Future use case note:** Once enough sessions are recorded (20+), consider exporting the longitudinal dataset to train a simple regression model predicting which finger will be weak on a given scale based on early-session note timing — a natural Phase 4 ML exercise using the same Splunk data.
+
 ### 3.4 — AI Coaching Pipeline (Workflows + MCP + Claude + Webex)
 
 **Goal:** Automate the full coaching loop — a new practice session triggers an agentic AI analysis delivered as a Webex Adaptive Card.
@@ -194,13 +219,20 @@ When given a new session, autonomously investigate the data to build context:
 - Compare left and right hand consistency
 - Note any scale-specific patterns
 
+The most important thing to communicate is **progress over time** — not just how today went,
+but whether the student is measurably improving across sessions. If you can say "your right
+hand evenness has improved 23% over the last 5 sessions" or "finger 4 has been consistently
+late for 3 weeks", that is far more valuable than a single-session snapshot.
+
 Return a JSON object with these fields:
 {
-  "summary": "2-3 sentence overall assessment",
-  "strengths": ["list of what went well"],
-  "focus_areas": ["list of specific things to work on, with finger numbers"],
+  "summary": "2-3 sentence overall assessment including trend context",
+  "strengths": ["list of what went well, with comparison to prior sessions where possible"],
+  "focus_areas": ["list of specific things to work on, with finger numbers and trend context"],
   "suggested_next_session": "one concrete practice instruction",
-  "trend": "improving | stable | needs_attention"
+  "trend": "improving | stable | needs_attention",
+  "trend_detail": "1-2 sentences on the specific metric driving the trend assessment",
+  "milestone": "optional — call out if a personal best was set this session"
 }
 ```
 
@@ -310,7 +342,17 @@ Original goals, deferred until after the presentation:
 
 - **MCP server for Cisco Workflows** — would let Claude *trigger* workflows as a tool (inverts control flow). Interesting but unclear presentation value — revisit when scope is locked.
 - **Webex vs. web dashboard** — or both. Webex is more Cisco-native and demo-friendly.
-- **MQTT broker** — need to confirm whether Splunk Edge Hub accepts direct MQTT connections or if a local broker (e.g. Mosquitto) is needed as an intermediary.
+- **MQTT broker** — resolved: Ubuntu broker at 198.18.133.101 via Node-RED is the production path. Splunk Edge Hub is optional.
+
+## Future Work / Backlog
+
+- **1Password secrets integration** — API keys (Anthropic, Webex bot token, Splunk token) must not be written to disk unencrypted. Integrate with 1Password CLI (`op run --env-file`) so all secrets are injected at runtime from the 1Password vault. This applies to both local development (`.env` equivalent via `op run`) and Cloud Run (secret manager or `op` sidecar). Treat this as a prerequisite before any API keys are committed or stored in Cloud Run env vars in plaintext.
+  - Reference: `op run -- python src/coach_agent.py` injects secrets from a reference file without touching disk
+  - Cloud Run alternative: Google Secret Manager (native integration, no 1Password dependency in prod)
+
+- **Longitudinal ML model (Phase 4)** — once 20+ sessions exist, train a simple regression model predicting finger weakness from early-session timing data. Splunk dataset is already structured for this.
+
+- **Splunk dashboard** — dedicated practice progress dashboard showing speed/evenness trends over time, per-finger heatmap, scale comparison. Natural companion to the Webex card output.
 
 ---
 
