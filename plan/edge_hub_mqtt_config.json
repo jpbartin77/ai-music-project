@@ -1,0 +1,149 @@
+{
+  "externalBrokerEnabled": true,
+  "lastUpdated": "2026-04-18T00:00:00.000000Z",
+  "topicRules": [
+
+    {
+      "topicName": "piano/notes",
+      "sensorId": "a1b2c3d4-0001-0001-0001-piano0000001",
+      "sensorType": "piano_note",
+      "description": "Real-time note events from piano practice session",
+      "metricRules": [
+        {
+          "metricId": "a1b2c3d4-0001-0002-0001-piano0000001",
+          "metricName": "velocity",
+          "unit": "count",
+          "value": "velocity"
+        },
+        {
+          "metricId": "a1b2c3d4-0001-0002-0002-piano0000002",
+          "metricName": "midi_number",
+          "unit": "count",
+          "value": "midi"
+        },
+        {
+          "metricId": "a1b2c3d4-0001-0002-0003-piano0000003",
+          "metricName": "finger",
+          "unit": "count",
+          "value": "finger ? finger : -1"
+        },
+        {
+          "metricId": "a1b2c3d4-0001-0002-0004-piano0000004",
+          "metricName": "time_ms",
+          "unit": "ms",
+          "value": "time_ms"
+        }
+      ],
+      "dimensionRules": [
+        {
+          "dimensionId": "a1b2c3d4-0001-0003-0001-piano0000001",
+          "dimensionKey": "note",
+          "dimensionValue": "name"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0001-0003-0002-piano0000002",
+          "dimensionKey": "hand",
+          "dimensionValue": "hand"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0001-0003-0003-piano0000003",
+          "dimensionKey": "scale",
+          "dimensionValue": "scale"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0001-0003-0004-piano0000004",
+          "dimensionKey": "session_id",
+          "dimensionValue": "session_id"
+        }
+      ],
+      "timestamp": {
+        "seconds": "timestamp_epoch",
+        "nanos": "0"
+      }
+    },
+
+    {
+      "topicName": "piano/sessions",
+      "sensorId": "a1b2c3d4-0002-0001-0001-piano0000002",
+      "sensorType": "piano_session",
+      "description": "Segment summary — speed, evenness, and per-finger metrics per hand",
+      "metricRules": [
+        {
+          "metricId": "a1b2c3d4-0002-0002-0001-piano0000001",
+          "metricName": "right_speed_bpm",
+          "unit": "bpm",
+          "value": "metrics.right.speed_bpm"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0002-piano0000002",
+          "metricName": "right_evenness_stddev_ms",
+          "unit": "ms",
+          "value": "metrics.right.evenness_stddev_ms"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0003-piano0000003",
+          "metricName": "right_evenness_cv_pct",
+          "unit": "pct",
+          "value": "metrics.right.evenness_cv_pct"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0004-piano0000004",
+          "metricName": "left_speed_bpm",
+          "unit": "bpm",
+          "value": "metrics.left.speed_bpm"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0005-piano0000005",
+          "metricName": "left_evenness_stddev_ms",
+          "unit": "ms",
+          "value": "metrics.left.evenness_stddev_ms"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0006-piano0000006",
+          "metricName": "left_evenness_cv_pct",
+          "unit": "pct",
+          "value": "metrics.left.evenness_cv_pct"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0007-piano0000007",
+          "metricName": "note_count_right",
+          "unit": "count",
+          "value": "$count(notes.right)"
+        },
+        {
+          "metricId": "a1b2c3d4-0002-0002-0008-piano0000008",
+          "metricName": "note_count_left",
+          "unit": "count",
+          "value": "$count(notes.left)"
+        }
+      ],
+      "dimensionRules": [
+        {
+          "dimensionId": "a1b2c3d4-0002-0003-0001-piano0000001",
+          "dimensionKey": "scale",
+          "dimensionValue": "scale"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0002-0003-0002-piano0000002",
+          "dimensionKey": "scale_display",
+          "dimensionValue": "scale_display"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0002-0003-0003-piano0000003",
+          "dimensionKey": "session_id",
+          "dimensionValue": "session_id"
+        },
+        {
+          "dimensionId": "a1b2c3d4-0002-0003-0004-piano0000004",
+          "dimensionKey": "segment_index",
+          "dimensionValue": "$string(segment_index)"
+        }
+      ],
+      "timestamp": {
+        "seconds": "timestamp_epoch",
+        "nanos": "0"
+      }
+    }
+
+  ]
+}

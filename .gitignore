@@ -223,4 +223,12 @@ data/raw/
 # Windows specific
 Thumbs.db
 desktop.inidata/
-data/
+
+# Claude Code memory (local session state)
+.claude/
+
+# Lab log bundles
+logs/
+
+# Obsidian app config
+notes/.obsidian/
