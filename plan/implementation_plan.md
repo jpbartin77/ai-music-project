@@ -151,6 +151,34 @@ index=edge_hub_mqtt source="piano/notes"
 | timechart avg(timing_stdev) by finger
 ```
 
+*Note: the `json_extract()` queries above require sufficient data spread across multiple time buckets to produce a trend. Use the `spath` queries below for early-stage data (fewer than ~20 sessions or all recorded in the same day).*
+
+**Working queries — confirmed with live data:**
+
+Splunk auto-extracts top-level JSON fields from HEC events. Nested fields (under `metrics.*`) require `spath`. Use `stats` instead of `timechart` until data spans multiple days.
+
+```spl
+-- Speed per scale (works immediately, any amount of data)
+index=edge_hub_mqtt source="piano/sessions"
+| spath input=event output=scale path=scale_display
+| spath input=event output=rh_bpm path=metrics.right.speed_bpm
+| stats avg(rh_bpm) as avg_bpm by scale
+
+-- Evenness per session — sortable timeline (one row per session)
+index=edge_hub_mqtt source="piano/sessions"
+| spath input=event output=cv path=metrics.right.evenness_cv_pct
+| spath input=event output=scale path=scale_display
+| spath input=event output=seg path=segment_index
+| table _time, scale, seg, cv
+| sort _time
+
+-- Raw field discovery — run on one event to confirm all available field names
+index=edge_hub_mqtt source="piano/sessions"
+| head 1
+| spath input=event
+| table *
+```
+
 **Future use case note:** Once enough sessions are recorded (20+), consider exporting the longitudinal dataset to train a simple regression model predicting which finger will be weak on a given scale based on early-session note timing — a natural Phase 4 ML exercise using the same Splunk data.
 
 ### 3.4 — AI Coaching Pipeline (Workflows + MCP + Claude + Webex)
