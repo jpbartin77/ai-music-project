@@ -1,5 +1,7 @@
 # AI Music Project — Implementation Plan
-*Last updated: April 18, 2026 (evening)*
+*Last updated: April 19, 2026*
+
+> **v1 of this plan is archived at `plan/implementation_plan_v1_archived_2026-04-18.md`.** That version documents the original Cloud Run + Google Cloud architecture. The pivot from v1 to this version is documented in `notes/2026-04-19_architecture-pivot.md`.
 
 ---
 
@@ -15,23 +17,21 @@ The tool choices (MIDI, MQTT, Splunk, Cisco Workflows, Claude, MCP, Webex) are d
 **Presentations this serves:**
 - AI music / hobby-as-AI-lab demo
 - Cisco Workflows standalone presentation (this project is the live demo use case)
-- The Workflows demo itself may also be included as part of the main presentation
 
 ---
 
 ## Architecture Overview
 
-### Current working architecture (April 2026)
+### What's Working Now (April 2026)
 
 ```mermaid
 flowchart TD
     A["🎹 Piano\nUSB MIDI"] -->|MIDI events| B["practice_session.py\nCapture · Score · Publish"]
-    B -->|MQTT piano/notes\npiano/sessions| C["Ubuntu MQTT Broker\n198.18.133.101:1883"]
-    C -->|All topics| D["Node-RED\n198.18.133.101:1880"]
-    D -->|HTTP POST| E["Splunk HEC\n198.18.135.50:8088"]
-    E --> F[("Splunk\nindex: edge_hub_mqtt\n⚠️ ephemeral — dCloud lab")]
+    B -->|MQTT| C["Ubuntu MQTT Broker\n198.18.133.101:1883"]
+    C -->|Node-RED| D["Splunk HEC\n198.18.135.50:8088"]
+    D --> F[("Splunk\nedge_hub_mqtt\n⚠️ dCloud — ephemeral")]
 
-    F -->|SPL queries\nREST API :8089| J["MCP Server\nsrc/mcp_server.py"]
+    F -->|SPL queries| J["MCP Server\nsrc/mcp_server.py"]
     J <-->|tool calls| K["coach_agent.py\nClaude claude-opus-4-7"]
     K -->|coaching JSON| W["webex_delivery.py"]
     W -->|Adaptive Card| M["📱 Webex Space"]
@@ -44,471 +44,250 @@ flowchart TD
 
 **Trigger (manual today):** `op run --env-file=.env.tpl -- python src/coach_agent.py`
 
-### Target architecture (once Splunk is cloud-hosted)
+---
+
+### Target Architecture (April 30 prototype)
 
 ```mermaid
 flowchart TD
-    A["🎹 Piano\nUSB MIDI"] -->|MIDI events| B["practice_session.py\n+ HECPublisher"]
-    B -->|direct HEC POST| F[("Splunk Cloud\nor persistent VM")]
+    A["🎹 Piano\nUSB MIDI"] -->|MIDI events| B["practice_session.py"]
+    B -->|direct HEC POST| F[("Splunk Cloud\npersistent")]
+    B -->|session end POST| WF["Cisco Workflows\nwebhook"]
 
-    F -->|Webhook alert\nnew session| G["ngrok tunnel\nor Cloud Run\nPOST /coach"]
+    U["👤 User"] -->|Webex message| WB["Webex Bot"]
+    WB -->|webhook| WF
 
-    G <-->|MCP tool calls| J["MCP Server\nsrc/mcp_server.py"]
+    WF -->|HTTP POST via ngrok| C["/coach\nworkstation"]
+    C <-->|MCP tool calls| J["mcp_server.py"]
     J -->|SPL queries| F
-    G -->|Claude API| K["Claude AI\nPractice Coach"]
-    K -->|coaching JSON| G
-    G -->|Adaptive Card| M["📱 Webex Space"]
+
+    C -->|coaching JSON\n+ optional chart| WF
+    WF -->|Adaptive Card\n+ chart attachment| M["📱 Webex Space"]
 
     style A fill:#4a90d9,color:#fff
     style F fill:#2d6a4f,color:#fff
-    style K fill:#6a4c93,color:#fff
+    style C fill:#6a4c93,color:#fff
+    style WF fill:#cc5500,color:#fff
     style M fill:#2d6a4f,color:#fff
 ```
 
----
-
-## What Is Already Built
-
-### `src/mcp_server.py` — COMPLETE ✅
-Five MCP tools exposing Splunk practice data to Claude: `get_recent_sessions`, `get_session_detail`, `get_finger_trends`, `compare_hands`, `get_scale_history`. All confirmed working against live Splunk data. See `notes/2026-04-18_mcp-server-and-coach-agent.md`.
-
-### `src/coach_agent.py` — COMPLETE ✅
-Agentic Claude loop (claude-opus-4-7). Autonomously makes 4-6 tool calls, analyzes longitudinal trends, and returns a structured JSON coaching report. Tested live — correctly identified a 286 BPM milestone and segment-level fatigue pattern. See `notes/2026-04-18_mcp-server-and-coach-agent.md`.
-
-### `src/webex_delivery.py` — COMPLETE ✅
-Builds and posts a Webex Adaptive Card v1.2. Color-coded trend indicator, bullet lists, milestone callout. Confirmed rendering correctly in Webex desktop client. See `notes/2026-04-18_webex-delivery.md`.
-
-### `src/cloud_run_app.py` — DEPLOYED ✅ (trigger path pending)
-Flask endpoint wrapping `run_coach()`. Deployed to Cloud Run at:
-`https://piano-coach-du77rapgfq-uc.a.run.app`
-Handles both manual POST `{"session_id": "..."}` and Splunk alert webhook format.
-**Note:** Cloud Run cannot reach dCloud private IPs (198.18.x.x). Automatic trigger from Splunk alert is deferred until Splunk moves to cloud infrastructure. See implementation notes below.
-
-### `.env.tpl` + 1Password integration — COMPLETE ✅
-All secrets (Anthropic, Splunk, Webex) stored in 1Password Private vault, injected via `op run --env-file=.env.tpl`. Nothing sensitive on disk or in git. See `notes/2026-04-18_1password-secrets.md`.
-
-### `src/midi_test.py` — COMPLETE ✅
-Simple proof-of-concept. Opens the first MIDI port, listens for events, prints NOTE ON / NOTE OFF with note names and velocities to the terminal. No file output. Used to verify Python can hear the piano.
-
-**To run:**
-```bash
-cd "c:\Users\jpbar\My Drive\Technical Projects\ai-music-project"
-.venv\Scripts\activate
-python src/midi_test.py
-# Press Ctrl+C to stop
-```
-
-### `src/piano_roll.py` — COMPLETE
-Full Phase 1 pipeline. Records MIDI for a set duration (default 15s), saves a `.mid` file, then renders a dark-themed piano roll PNG showing notes by pitch and time, coloured by key type (blue = white keys, pink = black keys), brightness scaled to velocity.
-
-**To run:**
-```bash
-cd "c:\Users\jpbar\My Drive\Technical Projects\ai-music-project"
-.venv\Scripts\activate
-python src/piano_roll.py
-# Play for 15 seconds — outputs data/recording.mid and data/recording_roll.png
-```
-
-**Output files** (in `data/`, gitignored):
-- `data/recording.mid` — raw MIDI file
-- `data/recording_roll.png` — piano roll image
-
-### Infrastructure
-- `reapy-next` patched for Python 3.13 — Reaper bridge confirmed working
-- Patch documented in `notes/Reapy_Patch_Notes.md`, automated via `patch_reapy.bat`
-
----
-
-## Phase 3 — AI Practice Coach (ACTIVE)
-*Target: ~2 weeks from April 2026*
-
-### 3.1 — Structured Scale Practice Capture
-**Goal:** Replace free-form recording with structured, scoreable practice sessions.
-
-**What to build** (`src/practice_session.py`):
-- Define finger-to-note mappings per scale (e.g. C major: thumb=C, index=D, middle=E, ring=F, pinky=G, etc. — both hands)
-- Accept a practice config at runtime: which scale, which hand
-- Capture raw MIDI with high-precision timestamps
-- Compute per-session metrics:
-  - **Speed** — average BPM across the scale run
-  - **Evenness** — timing variance between consecutive notes (std dev of inter-note intervals)
-  - **Per-finger analysis** — map each note back to its expected finger, flag timing outliers
-- Output: structured JSON session summary + raw `.mid` file
-
-*Deferred to Phase 4: articulation modes (legato/staccato)*
-
-### 3.2 — MQTT Publisher
-**Goal:** Send session data to Splunk via MQTT in real time (or on session completion).
-
-**What to build** (`src/mqtt_publisher.py`):
-- Connect to local MQTT broker (or Splunk Edge Hub directly if it supports direct MQTT)
-- Two message types:
-  - **Raw note events** — one MQTT message per NOTE_ON/NOTE_OFF, published during session
-  - **Session summary** — one structured JSON message at session end (speed, evenness, finger scores)
-- Topic structure e.g.: `piano/notes/raw`, `piano/session/summary`
-
-**Dependencies to add:** `paho-mqtt`
-
-### 3.3 — Splunk Configuration
-**Goal:** Ingest MQTT data into Splunk, build SPL queries for analysis.
-
-**Steps:**
-- Configure Splunk Edge Hub MQTT input (topics: `piano/#`)
-- Define two sourcetypes: `piano:note` and `piano:session`
-- Write SPL to:
-  - Surface session scores over time (trending)
-  - Identify weakest finger per scale
-  - Compare left hand vs. right hand evenness
-
-**Progress-over-time queries (priority):**
-The longitudinal view is the most compelling story — a single session is data, but a trend is insight. Build these SPL queries as saved searches and dashboard panels:
-
-```spl
--- Speed trend per scale over time
-index=edge_hub_mqtt source="piano/sessions"
-| eval scale=json_extract(event, "scale_display")
-| eval rh_bpm=json_extract(event, "metrics.right.speed_bpm")
-| timechart avg(rh_bpm) by scale
-
--- Evenness improvement over time (lower = better)
-index=edge_hub_mqtt source="piano/sessions"
-| eval cv=json_extract(event, "metrics.right.evenness_cv_pct")
-| timechart avg(cv)
-
--- Per-finger timing deviation trend (which fingers are getting better?)
-index=edge_hub_mqtt source="piano/notes"
-| eval finger=json_extract(event, "finger")
-| eval time_ms=json_extract(event, "time_ms")
-| stats avg(time_ms) as avg_timing, stdev(time_ms) as timing_stdev by finger, date_hour
-| timechart avg(timing_stdev) by finger
-```
-
-*Note: the `json_extract()` queries above require sufficient data spread across multiple time buckets to produce a trend. Use the `spath` queries below for early-stage data (fewer than ~20 sessions or all recorded in the same day).*
-
-**Working queries — confirmed with live data:**
-
-Splunk auto-extracts top-level JSON fields from HEC events. Nested fields (under `metrics.*`) require `spath`. Use `stats` instead of `timechart` until data spans multiple days.
-
-```spl
--- Speed per scale (works immediately, any amount of data)
-index=edge_hub_mqtt source="piano/sessions"
-| spath input=event output=scale path=scale_display
-| spath input=event output=rh_bpm path=metrics.right.speed_bpm
-| stats avg(rh_bpm) as avg_bpm by scale
-
--- Evenness per session — sortable timeline (one row per session)
-index=edge_hub_mqtt source="piano/sessions"
-| spath input=event output=cv path=metrics.right.evenness_cv_pct
-| spath input=event output=scale path=scale_display
-| spath input=event output=seg path=segment_index
-| table _time, scale, seg, cv
-| sort _time
-
--- Raw field discovery — run on one event to confirm all available field names
-index=edge_hub_mqtt source="piano/sessions"
-| head 1
-| spath input=event
-| table *
-```
-
-**Future use case note:** Once enough sessions are recorded (20+), consider exporting the longitudinal dataset to train a simple regression model predicting which finger will be weak on a given scale based on early-session note timing — a natural Phase 4 ML exercise using the same Splunk data.
-
-### 3.4 — AI Coaching Pipeline (Workflows + MCP + Claude + Webex)
-
-**Goal:** Automate the full coaching loop — a new practice session triggers an agentic AI analysis delivered as a Webex Adaptive Card.
-
 **Key design decisions:**
-- Workflows orchestrates but does not analyze — it delegates to Claude
-- Claude acts as a true agent: it receives a trigger, autonomously queries Splunk via MCP tools to build context, then generates coaching feedback
-- `/coach` returns a plain HTTP JSON response — Workflows reads it synchronously, no callback needed
-- Claude is the coaching model (analytical depth); Gemini assists with generating Cloud Run infrastructure code from the design spec below
-- Webex Adaptive Card is the sole output — visually compelling for a Cisco-ecosystem presentation
+- Workstation is the MIDI ingress point — all compute stays local until that changes
+- Workflows is the cloud meeting point: receives webhooks from Splunk alerts and Webex bot, routes to `/coach` via ngrok, posts results back to Webex
+- Workflows fits naturally as the Webex bot webhook receiver — it's a cloud endpoint by design, no extra infrastructure needed
+- ngrok exposes one endpoint: the local `/coach` service
+- Cloud Run (v1 plan) is parked but not deleted — reusable if MIDI moves off the workstation
 
 ---
 
-#### 3.4.1 — Splunk Alert → Cloud Run Trigger
+## What Is Already Built ✅
 
-**What:** Splunk webhook alert fires when a new `piano/sessions` event arrives in `edge_hub_mqtt`.
+### `src/mcp_server.py` — COMPLETE
+Five MCP tools exposing Splunk practice data to Claude: `get_recent_sessions`, `get_session_detail`, `get_finger_trends`, `compare_hands`, `get_scale_history`. Confirmed working against live Splunk data.
 
-**How:**
-- In Splunk: **Alerts → Create Alert** → search `index=edge_hub_mqtt source="piano/sessions"` → trigger when results > 0 → webhook action → POST to Cloud Run `/trigger`
-- Cloud Run `/trigger` receives the payload, extracts `session_id`, calls Cisco Workflows API to start the session workflow
+### `src/coach_agent.py` — COMPLETE
+Agentic Claude loop (claude-opus-4-7). Autonomously makes 4–6 tool calls, analyzes longitudinal trends, returns structured JSON coaching report. Tested live — correctly identified a 286 BPM milestone and segment-level fatigue pattern.
 
-**Files:** `cloud/main.py` — Flask/FastAPI app with `/trigger` and `/coach` routes
+### `src/webex_delivery.py` — COMPLETE
+Builds and posts a Webex Adaptive Card v1.2. Color-coded trend indicator, bullet lists, milestone callout. Confirmed rendering in Webex desktop client.
 
----
+### `src/cloud_run_app.py` — PARKED (not deleted)
+Flask `/coach` endpoint wrapping `run_coach()`. Originally deployed to Cloud Run. Kept as reference — the local `/coach` service will be derived from this.
 
-#### 3.4.2 — MCP Server (`src/mcp_server.py`)
+### `src/practice_session.py` + `src/mqtt_publisher.py` — COMPLETE
+Structured scale capture, scoring (speed/evenness/per-finger), MQTT publishing.
 
-**What:** Python MCP server exposing Splunk as callable tools for Claude.
-
-**Tools to expose:**
-
-| Tool | Arguments | Returns |
-|------|-----------|---------|
-| `get_recent_sessions` | `count: int` | Last N session summaries (scale, speed, evenness, segment_index) |
-| `get_session_detail` | `session_id: str` | Full note-level data for one session |
-| `get_finger_trends` | `scale: str, hand: str, sessions_back: int` | Per-finger timing history across sessions |
-| `compare_hands` | `session_id: str` | LH vs RH speed and evenness delta for a session |
-| `get_scale_history` | `scale: str` | Speed and evenness trend over all sessions for a scale |
-
-**Implementation:** Uses `mcp` Python SDK. Each tool runs a SPL query against the Splunk REST API (`https://198.18.135.50:8089/services/search/jobs`) and returns structured JSON.
-
-**Hosting:** Same Cloud Run container as the trigger/coach routes, started as a subprocess or sidecar.
+### `.env.tpl` + 1Password integration — COMPLETE
+All secrets injected at runtime via `op run --env-file=.env.tpl`. Nothing sensitive on disk or in git.
 
 ---
 
-#### 3.4.3 — Claude AI Agent (`src/coach_agent.py`)
+## Prerequisite: Persistent Cloud Splunk
 
-**What:** Agentic Claude session — Claude autonomously decides what to look up before generating coaching feedback.
+**This must be resolved before building anything else.** The longitudinal coaching value — "your ring finger has been consistently late for 3 weeks" — requires months of history. dCloud rotates weekly and wipes all data.
 
-**How it works:**
-1. Receives `session_id` and current session metrics
-2. Claude is initialized with a coaching system prompt (see below)
-3. Claude decides which MCP tools to call (e.g. pulls last 5 sessions, checks finger trends for weak fingers, compares hands)
-4. After gathering context, Claude writes a structured coaching report
-5. Returns JSON to the `/coach` route, which returns it as an HTTP 200 response to Workflows
+**Options:**
 
-**System prompt:**
-```
-You are an expert piano practice coach analyzing a student's scale practice data.
-You have access to tools that query the student's full practice history in Splunk.
-When given a new session, autonomously investigate the data to build context:
-- Check recent session trends (improving, plateauing, declining?)
-- Identify the weakest finger(s) based on timing deviation
-- Compare left and right hand consistency
-- Note any scale-specific patterns
+| Option | Cost | Ingest | Notes |
+|--------|------|--------|-------|
+| Splunk Cloud free trial | Free 14 days, ~$150/mo after | Full | Cleanest path, cloud-accessible immediately |
+| Splunk Free on GCP VM | ~$10–20/mo (VM cost) | 500MB/day | Persistent, reachable from internet, free forever |
+| Keep dCloud + export data | Free | — | Manual, breaks the automation story |
 
-The most important thing to communicate is **progress over time** — not just how today went,
-but whether the student is measurably improving across sessions. If you can say "your right
-hand evenness has improved 23% over the last 5 sessions" or "finger 4 has been consistently
-late for 3 weeks", that is far more valuable than a single-session snapshot.
-
-Return a JSON object with these fields:
-{
-  "summary": "2-3 sentence overall assessment including trend context",
-  "strengths": ["list of what went well, with comparison to prior sessions where possible"],
-  "focus_areas": ["list of specific things to work on, with finger numbers and trend context"],
-  "suggested_next_session": "one concrete practice instruction",
-  "trend": "improving | stable | needs_attention",
-  "trend_detail": "1-2 sentences on the specific metric driving the trend assessment",
-  "milestone": "optional — call out if a personal best was set this session"
-}
-```
+**Decision pending.** Resolve this first.
 
 ---
 
-#### 3.4.4 — Cisco Workflows
+## Remaining Work — April 30 Prototype
 
-**Two workflows to build:**
+### Priority order
 
-**Workflow 1 — Session Coaching** (triggered by Cloud Run `/trigger`):
+#### P1 — Cloud Splunk
+Get a persistent, internet-accessible Splunk instance. Update `SPLUNK_URL` and `SPLUNK_TOKEN` in 1Password. Confirm MCP tools connect.
+
+#### P2 — HEC Publisher (bypass Node-RED)
+Build `src/hec_publisher.py` — post directly to Splunk HEC from `practice_session.py`, eliminating the Node-RED → Ubuntu broker dependency. Eliminates manual setup on every lab rotation.
+
+**Interface:** Same as `MQTTPublisher` (`publish_note`, `publish_segment`). Controlled by env var so MQTT path can be retained if needed.
+
+#### P3 — ngrok Setup
+- Install ngrok, configure fixed subdomain (paid tier — required for a stable Workflows webhook URL)
+- Expose local `/coach` service
+- Store the stable ngrok URL in 1Password as `NGROK_COACH_URL`
+- Add `X-Coach-Token` auth header validation to `/coach` before exposing publicly
+
+#### P4 — Local `/coach` Service
+Adapt `src/cloud_run_app.py` to run as a local persistent service (not on Cloud Run). Two modes:
+
+**Mode 1 — Session trigger:**
+```json
+POST /coach
+{ "session_id": "...", "metrics": { ... } }
 ```
-Trigger: HTTP webhook (from Cloud Run)
-  → Extract session_id from payload
-  → HTTP POST to Cloud Run /coach  {session_id: ..., metrics: ...}
-  → Parse JSON response (summary, strengths, focus_areas, trend)
-  → Condition: if trend == "needs_attention" → set card color red, else green
-  → Send Webex Adaptive Card to bot space
+Runs the full agentic coaching loop. Returns structured JSON.
+
+**Mode 2 — Freeform query:**
+```json
+POST /coach
+{ "query": "How am I doing with my thumb crossover on ascending A major?" }
+```
+Claude interprets the query, decides which MCP tools to call, returns a response JSON. Optionally includes a chart (see P6).
+
+Both modes return the same Adaptive Card-compatible JSON schema.
+
+Consider: wire `run_coach()` call into `practice_session.py` at session end as a fallback trigger (no Workflows dependency for local testing).
+
+#### P5 — Cisco Workflows: Session Trigger Flow
+
+**Workflow 1 — Post-session coaching:**
+```
+Trigger: HTTP webhook (POST from practice_session.py at session end)
+  → Extract session_id and metrics from payload
+  → HTTP POST to ngrok /coach  { session_id, metrics }  [with X-Coach-Token header]
+  → Parse JSON response
+  → Condition: trend == "needs_attention" → red card, else green
+  → Send Webex Adaptive Card
 ```
 
-**Workflow 2 — Weekly Summary** (scheduled, optional):
-```
-Trigger: Schedule (Sunday evening)
-  → HTTP POST to Cloud Run /coach  {mode: "weekly_summary"}
-  → Claude aggregates the week's sessions
-  → Send weekly progress card to Webex
-```
-
-**Workflows AI Assistant prompt** (paste this into the AI Assistant in the Workflows UI):
-
-> Create a workflow that is triggered by an incoming webhook. The webhook payload contains a JSON body with fields `session_id` (string) and `metrics` (object). The workflow should make an HTTP POST request to an external API endpoint `/coach` passing the full webhook payload as the request body, with Content-Type application/json. The response will be a JSON object with fields: `summary` (string), `strengths` (array of strings), `focus_areas` (array of strings), `suggested_next_session` (string), and `trend` (string, one of: improving, stable, needs_attention). After receiving the response, send a Webex message to a space using a bot. The message should be an Adaptive Card showing the summary text prominently, the strengths and focus areas as bullet lists, and the suggested next session as a highlighted action item. If the trend field equals "needs_attention", set the card's accent color to red; otherwise use green.
-
----
-
-#### 3.4.5 — Webex Bot + Adaptive Cards
+#### P6 — Webex Bot + Workflows: Freeform Query Flow
 
 **Setup:**
-1. Register a bot at [developer.webex.com](https://developer.webex.com) → name it "Piano Coach"
-2. Add the bot to a personal Webex space
-3. Store the bot token in Cloud Run environment variables
+1. Register Webex bot at developer.webex.com → "Piano Coach"
+2. Configure Webex bot webhook → points to Workflows trigger URL
+3. Workflows receives Webex webhook (message text + sender)
 
-**Adaptive Card design:**
-
-```json
-{
-  "type": "AdaptiveCard",
-  "body": [
-    { "type": "TextBlock", "text": "🎹 Practice Session Complete", "size": "Large", "weight": "Bolder" },
-    { "type": "TextBlock", "text": "{{summary}}", "wrap": true },
-    { "type": "TextBlock", "text": "✅ Strengths", "weight": "Bolder" },
-    { "type": "TextBlock", "text": "{{strengths_bullets}}", "wrap": true },
-    { "type": "TextBlock", "text": "🎯 Focus Areas", "weight": "Bolder" },
-    { "type": "TextBlock", "text": "{{focus_bullets}}", "wrap": true },
-    { "type": "TextBlock", "text": "Next session: {{suggested_next_session}}",
-      "wrap": true, "color": "Accent" }
-  ]
-}
+**Workflow 2 — Freeform query:**
+```
+Trigger: Webex bot message webhook
+  → Extract message text
+  → HTTP POST to ngrok /coach  { query: "<message text>" }  [with X-Coach-Token]
+  → Parse JSON response
+  → If response includes chart_url → attach image to card
+  → Send Webex Adaptive Card reply
 ```
 
----
+**Example queries the bot should handle:**
+- "How am I doing with my A scale?"
+- "Show me my progress over the last two weeks"
+- "What's going on with my thumb crossover when ascending?" *(thumb tucks under after finger 3 — a known weak point)*
+- "Which scale has improved the most?"
 
-#### 3.4.6 — Google Cloud Run Infrastructure
+#### P7 — Chart/Graph Generation
 
-**Design spec for Gemini** (paste into Gemini to generate the Cloud Run service):
+Where appropriate, `/coach` can generate a chart and include it in the response. Charts that show well:
+- Speed trend over time (BPM per scale, multiple lines)
+- Evenness improvement curve (lower CV% = better)
+- Per-finger timing deviation heatmap
 
-> Build a Python FastAPI application for Google Cloud Run with the following two routes:
->
-> **POST /trigger** — receives a Splunk webhook alert payload (JSON), extracts the `result.session_id` field, then makes an HTTP POST request to a Cisco Workflows webhook URL (stored in environment variable `WORKFLOWS_WEBHOOK_URL`) with body `{"session_id": "<extracted_id>"}`. Returns 200 OK.
->
-> **POST /coach** — receives a JSON body with `session_id` (string) and `metrics` (object). Initializes an Anthropic Claude client (API key from env var `ANTHROPIC_API_KEY`) and runs an agentic loop: Claude is given a system prompt as a piano practice coach and has access to MCP tools that query Splunk (Splunk base URL from env var `SPLUNK_URL`, token from `SPLUNK_TOKEN`). The MCP tools are: `get_recent_sessions(count)`, `get_session_detail(session_id)`, `get_finger_trends(scale, hand, sessions_back)`, `compare_hands(session_id)`. Run the agent loop until Claude returns a final answer (no more tool calls). Parse the final answer as JSON and return it as the HTTP response body with status 200.
->
-> Include a Dockerfile. Use `google-cloud-run` deploy instructions in the README. Required environment variables: `ANTHROPIC_API_KEY`, `SPLUNK_URL`, `SPLUNK_TOKEN`, `WORKFLOWS_WEBHOOK_URL`, `WEBEX_BOT_TOKEN`.
+**Implementation approach (TBD):**
+- Option A: Generate PNG locally (matplotlib), save to temp file, attach to Webex message via bot API
+- Option B: Generate an image URL (e.g. upload to GCS bucket) and include in Adaptive Card as `Image` element
 
-**Environment variables to configure in Cloud Run:**
+Chart generation is optional for the April 30 prototype — include if time allows, omit if it creates risk to the deadline.
 
-| Variable | Value |
-|----------|-------|
-| `ANTHROPIC_API_KEY` | From console.anthropic.com |
-| `SPLUNK_URL` | `https://198.18.135.50:8089` |
-| `SPLUNK_TOKEN` | Splunk API token (create in Splunk Settings) |
-| `WORKFLOWS_WEBHOOK_URL` | From Cisco Workflows trigger config |
-| `WEBEX_BOT_TOKEN` | From developer.webex.com bot registration |
+#### P8 — Pre-record Demo Sessions
 
-### 3.5 — Pre-record Demo Data
+Once the pipeline is stable, record 5–10 real practice sessions:
+- Multiple scales (C, G, F, A major minimum)
+- Visible improvement arc across sessions
+- At least one session with a clear weak finger
+- At least one session with a thumb-crossover timing anomaly
 
-With the pipeline complete, record 5-10 real practice sessions covering:
-- Multiple scales (C, G, F major minimum)
-- Visible improvement arc across sessions (speeds up, evenness improves)
-- At least one session with a clear weak finger to demonstrate coaching specificity
-
-This data drives the live Splunk dashboard and generates real Claude coaching cards for the presentation.
+This data drives all demo recordings.
 
 ---
 
-## Phase 4 — Future (post-presentation)
+## April 30 Prototype Scope
 
-Original goals, deferred until after the presentation:
+**Must work (for recording):**
+- [ ] Cloud Splunk receiving live practice data
+- [ ] `practice_session.py` → HEC direct (no Node-RED)
+- [ ] Session end → Workflows → `/coach` → Webex Adaptive Card
+- [ ] Webex bot freeform query → Workflows → `/coach` → Webex card reply
+- [ ] At least one example query showing trend data
 
-- **Chord detection** using `music21` — identify chords from free-play recordings
-- **Label piano roll visualizations** with chord names
-- **Build a training dataset** from multiple recordings
-- **Train an AI model** on personal playing data
-- **Live call-and-response** — AI generates musical responses routed through Reaper/Pianoteq via Claude MCP (requires keyboard present at demo)
+**Nice to have:**
+- [ ] Chart/graph in at least one response
+- [ ] Thumb-crossover specific analysis working
+- [ ] Weekly summary workflow
+
+**Not required for April 30:**
+- Splunk alert as the session trigger (practice_session.py direct POST is fine)
+- Chart generation (include only if it doesn't risk the deadline)
+- MCP server for Cisco Workflows (inverted control flow — still under consideration, deferred)
 
 ---
 
-## Open Questions / Under Consideration
+## Future Architecture (post-presentation)
 
-- **MCP server for Cisco Workflows** — would let Claude *trigger* workflows as a tool (inverts control flow). Interesting but unclear presentation value — revisit when scope is locked.
-- **Webex vs. web dashboard** — or both. Webex is more Cisco-native and demo-friendly.
-- **MQTT broker** — resolved: Ubuntu broker at 198.18.133.101 via Node-RED is the production path. Splunk Edge Hub is optional.
+Once MIDI is liberated from the workstation (Bluetooth MIDI / phone app):
+- Workstation dependency drops
+- Move `/coach` to Cloud Run or similar
+- ngrok tunnels eliminated
+- Workflows webhook URL becomes a stable Cloud Run URL
 
-## Implementation Notes (running log)
+**Phase 4 (post-presentation):**
+- Chord detection using `music21`
+- Piano roll with chord labels
+- Training dataset from recordings
+- Live call-and-response AI via Reaper/Pianoteq
 
-### MCP Server — tool status as of April 18, 2026
+---
 
-All five tools connect to Splunk and return data. Confirmed against live session data.
+## Open Issues / Decisions Pending
+
+- **Cloud Splunk** — which option? Must decide this week.
+- **ngrok tier** — free (changing URL) vs paid (fixed subdomain). Fixed is required for a stable Workflows webhook URL.
+- **Chart delivery** — local PNG via bot API, or GCS-hosted URL in Adaptive Card?
+- **`get_finger_trends` SPL fix** — IOI-based deviation rewrite still deferred. Current implementation returns misleading values for fingers late in the scale. Fix before demo recording.
+
+---
+
+## Implementation Notes
+
+### MCP Server tool status (April 18, 2026)
 
 | Tool | Status | Notes |
 |------|--------|-------|
 | `get_recent_sessions` | ✅ Working | All fields correct |
-| `compare_hands` | ✅ Working | All fields correct after adding `_time`, `session_id`, `scale` to table |
-| `get_scale_history` | ✅ Working | All fields correct after adding `scale`, `scale_display` to table |
-| `get_session_detail` | ✅ Working | `finger: null` on early sessions is a data issue — scale detection hadn't locked in yet, not a code bug |
-| `get_finger_trends` | ⚠️ Needs improvement | Returns data but deviation values are not meaningful. Current approach computes each note's deviation from the session-wide mean `time_ms` (cumulative time since session start). Fingers appearing later in the scale (4, 5) will always show negative deviation against the global mean — this is an artifact of scale position, not actual timing weakness. Correct fix: compute inter-onset intervals within each segment and measure per-finger deviation from the expected IOI. Complex SPL — defer to after core pipeline is working. |
+| `compare_hands` | ✅ Working | All fields correct |
+| `get_scale_history` | ✅ Working | All fields correct |
+| `get_session_detail` | ✅ Working | `finger: null` on early sessions — data issue, not a code bug |
+| `get_finger_trends` | ⚠️ Needs fix | Deviation values not meaningful — uses cumulative time vs. session mean. Fix: compute IOI-based deviation within each segment. Defer until after core pipeline works. |
 
-### Node-RED dependency — should be eliminated
+### Node-RED dependency (to be eliminated in P2)
 
-**Current path:** `practice_session.py` → MQTT → Ubuntu broker → Node-RED → Splunk HEC
+Current path routes through Node-RED on the Ubuntu broker. Must be rebuilt manually on every dCloud rotation. HEC publisher will eliminate this entirely.
 
-**Problem:** Node-RED requires manual configuration each time the dCloud lab session is rotated (weekly). The `piano/#` flow and HTTP POST node must be rebuilt from scratch in the new lab instance. This is friction that will break the demo setup cadence.
+### 1Password secrets (all working)
 
-**Recommended fix:** Post directly to Splunk HEC from `practice_session.py` and `mqtt_publisher.py`, bypassing Node-RED and the MQTT broker entirely for Splunk ingestion. The HEC endpoint (`https://198.18.135.50:8089`) and token are already confirmed working from the PC.
+| Secret | 1Password item |
+|--------|---------------|
+| `ANTHROPIC_API_KEY` | Private vault |
+| `SPLUNK_URL` | Private vault |
+| `SPLUNK_TOKEN` | Private vault |
+| `WEBEX_BOT_TOKEN` | Private vault |
+| `NGROK_COACH_URL` | Add when ngrok is configured |
+| `COACH_TOKEN` | Add when `/coach` auth is implemented |
 
-**Proposed new path:** `practice_session.py` → HEC POST (direct) → Splunk
-
-**Implementation:** Add a `HECPublisher` class to `src/` alongside `MQTTPublisher`. Same interface (`publish_note`, `publish_segment`), but POSTs directly to HEC rather than publishing to MQTT. `practice_session.py` instantiates both (or either, controlled by env var) so MQTT can be retained if needed for other consumers.
-
-**What this eliminates:** Node-RED piano flow, Ubuntu broker dependency for Splunk ingestion, manual Node-RED setup on lab rotation.
-
-**What this does NOT affect:** The Ubuntu broker still exists in the lab for Meraki device data. We just stop routing our data through it.
-
-**Lab rotation checklist (target state — after HEC publisher is built):**
-- Set `SPLUNK_TOKEN` (from 1Password)
-- Set `SPLUNK_URL` (static: `https://198.18.135.50:8089`)
-- Set `ANTHROPIC_API_KEY` (from 1Password)
-- Run `practice_session.py` — everything else is automatic
-
-### Cloud Run — network boundary discovery (April 18, 2026)
-
-Cloud Run was successfully deployed and the service is live. However, when triggered it times
-out trying to reach Splunk at `198.18.135.50:8089`. Root cause: Cloud Run runs on GCP's public
-network and has no route to the dCloud private lab IPs. The user's PC can reach these IPs via a
-static route, but GCP cannot.
-
-**Decision:** Keep Cloud Run deployed (costs nothing at rest). Defer it as the primary trigger
-path until Splunk is on cloud infrastructure. Use local trigger (Option A) in the meantime.
-
-**Rejected alternatives:**
-- Splunk pushing full session data in the webhook payload — loses multi-session history queries
-- VPN from GCP to dCloud — too complex for a lab demo
-- Cloudflare Tunnel — competitively awkward for a Cisco conference presentation
-
-**Path forward:**
-1. Short term: auto-trigger `run_coach()` from `practice_session.py` at session end (local, reliable)
-2. Medium term: move to persistent Splunk (Cloud trial or GCP VM). Once Splunk is reachable from
-   the internet, Cloud Run + Splunk alert webhook becomes the clean automated trigger.
-3. For webhook auth: add `X-Coach-Token` header check to `/coach` to prevent unauthorized API use.
-   Splunk alert config sends the header; Cloud Run validates it against a Secret Manager value.
-4. Tunnel option: ngrok is the preferred choice for Cisco conference context (competitively neutral).
-   Add a fixed subdomain (ngrok paid tier) for a stable webhook URL.
-
-### Data persistence — the blocking issue
-
-dCloud lab sessions rotate weekly, wiping all Splunk data. The longitudinal coaching analysis
-(the core value prop) requires months of history. Building cloud infrastructure on top of
-ephemeral Splunk is premature.
-
-**Options under consideration:**
-- **Splunk Cloud free trial** (14 days, then ~$150/mo) — full-featured, cloud-accessible, cleanest path
-- **Splunk Free on a GCP VM** (500MB/day ingest, free forever) — persistent, reachable from Cloud Run
-- **Alternative time-series store** (InfluxDB, BigQuery) — would require rewriting MCP tools
-
-**Decision pending.** Resolve this before investing further in the automated trigger pipeline.
-
----
-
-## Future Work / Backlog
-
-- **HEC publisher** (`src/hec_publisher.py`) — bypass Node-RED, post directly to Splunk HEC. Eliminates manual Node-RED setup on lab rotation. See implementation note above.
-
-- **1Password secrets integration** — API keys (Anthropic, Webex bot token, Splunk token) must not be written to disk unencrypted. Integrate with 1Password CLI (`op run --env-file`) so all secrets are injected at runtime from the 1Password vault. This applies to both local development (`.env` equivalent via `op run`) and Cloud Run (secret manager or `op` sidecar). Treat this as a prerequisite before any API keys are committed or stored in Cloud Run env vars in plaintext.
-  - Reference: `op run -- python src/coach_agent.py` injects secrets from a reference file without touching disk
-  - Cloud Run alternative: Google Secret Manager (native integration, no 1Password dependency in prod)
-
-- **`get_finger_trends` SPL fix** — rewrite to compute IOI-based deviation within each segment rather than deviation from cumulative session time. See MCP tool status note above.
-
-- **Longitudinal ML model (Phase 4)** — once 20+ sessions exist, train a simple regression model predicting finger weakness from early-session timing data. Splunk dataset is already structured for this.
-
-- **Splunk dashboard** — dedicated practice progress dashboard showing speed/evenness trends over time, per-finger heatmap, scale comparison. Natural companion to the Webex card output.
-
----
-
-## Immediate Next Steps
-
-**Completed as of April 18, 2026:**
-- ✅ Structured practice capture (`practice_session.py`, `mqtt_publisher.py`)
-- ✅ Node-RED → Splunk HEC pipeline confirmed with live data
-- ✅ MCP server with 5 working Splunk tools
-- ✅ Claude coaching agent — agentic loop, longitudinal analysis, JSON output
-- ✅ Webex Adaptive Card delivery — confirmed rendering in client
-- ✅ 1Password secrets integration
-- ✅ Cloud Run deployed (trigger path deferred — network boundary issue)
-
-**Next session priorities:**
-1. **Decide on persistent Splunk** — Cloud trial vs GCP VM. This unblocks everything else.
-2. **Wire `run_coach()` into `practice_session.py`** — auto-trigger coaching at session end (no manual command needed)
-3. **Add `X-Coach-Token` auth to `/coach`** — before enabling any public webhook URL
-4. **Build `src/hec_publisher.py`** — bypass Node-RED, post directly to Splunk HEC. Eliminates weekly lab rotation friction.
-5. **Pre-record demo sessions** — once data pipeline is stable, record 5-10 sessions across multiple scales to build a compelling improvement arc for the presentation
+Run with: `op run --env-file=.env.tpl -- python src/<script>.py`
