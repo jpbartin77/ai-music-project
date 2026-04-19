@@ -372,11 +372,53 @@ Original goals, deferred until after the presentation:
 - **Webex vs. web dashboard** — or both. Webex is more Cisco-native and demo-friendly.
 - **MQTT broker** — resolved: Ubuntu broker at 198.18.133.101 via Node-RED is the production path. Splunk Edge Hub is optional.
 
+## Implementation Notes (running log)
+
+### MCP Server — tool status as of April 18, 2026
+
+All five tools connect to Splunk and return data. Confirmed against live session data.
+
+| Tool | Status | Notes |
+|------|--------|-------|
+| `get_recent_sessions` | ✅ Working | All fields correct |
+| `compare_hands` | ✅ Working | All fields correct after adding `_time`, `session_id`, `scale` to table |
+| `get_scale_history` | ✅ Working | All fields correct after adding `scale`, `scale_display` to table |
+| `get_session_detail` | ✅ Working | `finger: null` on early sessions is a data issue — scale detection hadn't locked in yet, not a code bug |
+| `get_finger_trends` | ⚠️ Needs improvement | Returns data but deviation values are not meaningful. Current approach computes each note's deviation from the session-wide mean `time_ms` (cumulative time since session start). Fingers appearing later in the scale (4, 5) will always show negative deviation against the global mean — this is an artifact of scale position, not actual timing weakness. Correct fix: compute inter-onset intervals within each segment and measure per-finger deviation from the expected IOI. Complex SPL — defer to after core pipeline is working. |
+
+### Node-RED dependency — should be eliminated
+
+**Current path:** `practice_session.py` → MQTT → Ubuntu broker → Node-RED → Splunk HEC
+
+**Problem:** Node-RED requires manual configuration each time the dCloud lab session is rotated (weekly). The `piano/#` flow and HTTP POST node must be rebuilt from scratch in the new lab instance. This is friction that will break the demo setup cadence.
+
+**Recommended fix:** Post directly to Splunk HEC from `practice_session.py` and `mqtt_publisher.py`, bypassing Node-RED and the MQTT broker entirely for Splunk ingestion. The HEC endpoint (`https://198.18.135.50:8089`) and token are already confirmed working from the PC.
+
+**Proposed new path:** `practice_session.py` → HEC POST (direct) → Splunk
+
+**Implementation:** Add a `HECPublisher` class to `src/` alongside `MQTTPublisher`. Same interface (`publish_note`, `publish_segment`), but POSTs directly to HEC rather than publishing to MQTT. `practice_session.py` instantiates both (or either, controlled by env var) so MQTT can be retained if needed for other consumers.
+
+**What this eliminates:** Node-RED piano flow, Ubuntu broker dependency for Splunk ingestion, manual Node-RED setup on lab rotation.
+
+**What this does NOT affect:** The Ubuntu broker still exists in the lab for Meraki device data. We just stop routing our data through it.
+
+**Lab rotation checklist (target state — after HEC publisher is built):**
+- Set `SPLUNK_TOKEN` (from 1Password)
+- Set `SPLUNK_URL` (static: `https://198.18.135.50:8089`)
+- Set `ANTHROPIC_API_KEY` (from 1Password)
+- Run `practice_session.py` — everything else is automatic
+
+---
+
 ## Future Work / Backlog
+
+- **HEC publisher** (`src/hec_publisher.py`) — bypass Node-RED, post directly to Splunk HEC. Eliminates manual Node-RED setup on lab rotation. See implementation note above.
 
 - **1Password secrets integration** — API keys (Anthropic, Webex bot token, Splunk token) must not be written to disk unencrypted. Integrate with 1Password CLI (`op run --env-file`) so all secrets are injected at runtime from the 1Password vault. This applies to both local development (`.env` equivalent via `op run`) and Cloud Run (secret manager or `op` sidecar). Treat this as a prerequisite before any API keys are committed or stored in Cloud Run env vars in plaintext.
   - Reference: `op run -- python src/coach_agent.py` injects secrets from a reference file without touching disk
   - Cloud Run alternative: Google Secret Manager (native integration, no 1Password dependency in prod)
+
+- **`get_finger_trends` SPL fix** — rewrite to compute IOI-based deviation within each segment rather than deviation from cumulative session time. See MCP tool status note above.
 
 - **Longitudinal ML model (Phase 4)** — once 20+ sessions exist, train a simple regression model predicting finger weakness from early-session timing data. Splunk dataset is already structured for this.
 
