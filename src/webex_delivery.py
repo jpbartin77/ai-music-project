@@ -17,6 +17,9 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
+
+import requests
 
 
 WEBEX_API = "https://webexapis.com/v1"
@@ -157,21 +160,13 @@ def build_card(report: dict) -> dict:
     }
 
 
-def post_card(report: dict) -> None:
-    room_id = os.environ.get("WEBEX_ROOM_ID", "")
-    if not room_id:
-        raise RuntimeError("WEBEX_ROOM_ID environment variable is not set — run with --list-rooms to find it")
-
-    card    = build_card(report)
+def _post_adaptive_card(room_id: str, card: dict, markdown: str) -> dict:
+    """Post the Adaptive Card via JSON. Returns the parsed Webex response."""
     payload = json.dumps({
         "roomId": room_id,
-        "markdown": f"🎹 **Piano Practice Report** — {report.get('summary', '')}",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": card,
-        }],
+        "markdown": markdown,
+        "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": card}],
     }).encode()
-
     req = urllib.request.Request(
         f"{WEBEX_API}/messages",
         data=payload,
@@ -179,9 +174,51 @@ def post_card(report: dict) -> None:
         method="POST",
     )
     with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read())
+        return json.loads(resp.read())
 
-    print(f"  [webex] Card posted -- message id: {result.get('id', '?')}")
+
+def _post_file(room_id: str, file_path: Path, markdown: str) -> dict:
+    """Post a file attachment via multipart. Returns the parsed Webex response."""
+    token = os.environ.get("WEBEX_BOT_TOKEN", "")
+    with open(file_path, "rb") as fh:
+        resp = requests.post(
+            f"{WEBEX_API}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"roomId": room_id, "markdown": markdown},
+            files={"files": (file_path.name, fh, "image/png")},
+            timeout=30,
+        )
+    if not resp.ok:
+        print(f"  [webex] File post failed: {resp.status_code} — {resp.text[:300]}")
+    resp.raise_for_status()
+    return resp.json()
+
+
+def post_card(report: dict, attachment: Path | str | None = None) -> None:
+    """
+    Post the coaching Adaptive Card to Webex.
+
+    Webex's API doesn't accept Adaptive Card attachments and file uploads in the
+    same multipart request, so when `attachment` is provided we send two messages
+    in sequence: the card first (headline), then the chart (supporting visual).
+    """
+    room_id = os.environ.get("WEBEX_ROOM_ID", "")
+    if not room_id:
+        raise RuntimeError("WEBEX_ROOM_ID environment variable is not set — run with --list-rooms to find it")
+
+    card     = build_card(report)
+    markdown = f"🎹 **Piano Practice Report** — {report.get('summary', '')}"
+
+    card_result = _post_adaptive_card(room_id, card, markdown)
+    print(f"  [webex] Card posted -- message id: {card_result.get('id', '?')}")
+
+    if attachment:
+        attachment = Path(attachment)
+        if not attachment.exists():
+            print(f"  [webex] Attachment {attachment} missing — skipping chart post.")
+            return
+        chart_result = _post_file(room_id, attachment, "📊 Practice charts")
+        print(f"  [webex] Chart posted -- message id: {chart_result.get('id', '?')}")
 
 
 if __name__ == "__main__":

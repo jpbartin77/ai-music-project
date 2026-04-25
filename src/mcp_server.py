@@ -198,15 +198,26 @@ def _dispatch(name: str, args: dict) -> dict | list:
         scale = args["scale"]
         hand  = args["hand"]
         n     = args.get("sessions_back", 10)
+        # IOI-based deviation: each note's gap-to-previous-note compared to the
+        # session's average IOI. Positive = finger lags, negative = finger rushes.
+        # Filters: ioi > 0 (skip first note in each session), ioi < 1000ms (skip
+        # gaps between segments — 2-second silences mark segment boundaries).
         rows = splunk_search(
             f'index={SPLUNK_INDEX} source="piano/notes" '
             f'| spath input=event '
             f'| search scale="{scale}" hand="{hand}" finger!=null finger!="null" '
-            f'| eventstats avg(time_ms) as session_mean_ms by session_id '
-            f'| eval deviation_ms=time_ms-session_mean_ms '
+            f'| eval time_ms=tonumber(time_ms) '
+            f'| sort 0 session_id time_ms '
+            f'| streamstats current=f window=1 last(time_ms) as prev_time_ms by session_id '
+            f'| eval ioi_ms=time_ms-prev_time_ms '
+            f'| where isnotnull(ioi_ms) AND ioi_ms>0 AND ioi_ms<1000 '
+            f'| eventstats avg(ioi_ms) as session_avg_ioi by session_id '
+            f'| eval deviation_ms=ioi_ms-session_avg_ioi '
             f'| stats avg(deviation_ms) as avg_deviation_ms, '
+            f'        stdev(deviation_ms) as stdev_deviation_ms, '
             f'        count as note_count by finger '
-            f'| eval avg_deviation_ms=round(avg_deviation_ms,2) '
+            f'| eval avg_deviation_ms=round(avg_deviation_ms,2), '
+            f'        stdev_deviation_ms=round(stdev_deviation_ms,2) '
             f'| sort finger',
             max_results=20,
         )

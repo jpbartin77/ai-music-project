@@ -90,25 +90,66 @@ Once pipeline is stable, record 5–10 real practice sessions:
 
 ---
 
-## Phase 1.5 — Stretch Goal: Webex Bot via Workflows
-*Begin only if Phase 1 is stable with time to spare before April 30*
+## Phase 1.5 — Layer-on Demo Modes (presentation focus)
+*Builds the artifacts that make the June presentation compelling. Not rip-and-replace — additive modes opt-in via env var. The existing per-segment card behavior keeps working.*
 
-This is the one place Workflows genuinely fits: as a cloud webhook receiver for Webex bot messages. A user sends a freeform question to the Piano Coach bot in Webex → Workflows receives the webhook → POSTs to local `/coach` via ngrok → Claude runs the agentic loop → Workflows delivers the card reply.
+The June presentation arc requires three things the current pipeline doesn't have:
+1. A way to **see what the agent is doing** while it runs (for the dissect section)
+2. A way to **handle multiple repetitions** of the same scale gracefully (one summary, not five cards)
+3. A **headline visual** that is unique to this project (the piano-key timing diagram)
 
-**Why it fits:** Webex bot webhooks must land on a public cloud endpoint. Workflows is that by design.
+These are not throwaway — each one becomes reusable when the Webex bot path is built later. The same summary aggregation feeds a "how am I doing on F major?" question; the same keyboard viz can be attached to any future card.
 
-**What it adds to the demo:** a live conversational moment — type a question, get a coaching card back. Contrasts with the automated end-of-session card.
+### P1.5.1 — Step-by-step demo orchestrator
 
-**What it requires:**
-- ngrok paid tier (fixed subdomain) — expose local `/coach` on port 8080
-- Register Webex bot at developer.webex.com
-- Local `/coach` Flask service — adapt `src/cloud_run_app.py`, add `X-Coach-Token` auth, add freeform query mode
-- One Workflow: Webex bot webhook → extract message → POST to ngrok `/coach` → send card reply
+Build a wrapper script (`tools/demo_orchestrator.py`) that imports the existing pipeline functions and writes a progressively-built Markdown log as it runs.
 
-**Example queries the bot should handle:**
-- "How am I doing with my A scale?"
-- "Which scale has improved the most?"
-- "What's going on with my thumb crossover?"
+**Log format** — each section captures one stage of the run with:
+- Header (e.g., "Tool: get_recent_sessions called")
+- Plain-English explanation of what's happening
+- Code snippet of the function being executed
+- Partial Mermaid diagram that grows over the run (each stage adds nodes)
+
+The log file is wiped and rewritten each run. One canonical log is saved separately for the presentation.
+
+**Critical files:**
+- `tools/demo_orchestrator.py` — new file
+- Imports from `src/coach_agent.py`, `src/mcp_server.py` — no changes needed there
+- Output: `data/demo_log.md` (and a presentation copy elsewhere)
+
+### P1.5.2 — Summary mode (one card per scale-type per session)
+
+Default behavior stays per-segment. Set `SESSION_SUMMARY_MODE=true` to:
+- Suppress the per-segment card
+- At session end, group segments by scale name
+- For each scale-type, compute three views: **best run**, **average across reps**, **trend within session**
+- Post one summary card per scale-type
+
+**Critical files:**
+- `src/practice_session.py` — gate the existing `_maybe_run_coach()` call on the env var; add a new session-end path
+- `src/coach_agent.py` — add a `run_coach_summary(session_id, scale)` variant or extend `run_coach`
+- `src/webex_delivery.py` — extend the card layout to accommodate three views + optional image attachment
+
+### P1.5.3 — Two charts on the summary card
+
+Generate two PNGs per summary card (one per scale-type per session):
+
+1. **Cross-session trend** — line chart showing speed (BPM) and evenness (CV%) for this scale across recent sessions. The longitudinal story Splunk exists to tell. Auto-scales the time axis.
+2. **Per-finger deviation** — horizontal bar chart, color-coded green/yellow/red by deviation magnitude, bidirectional (early vs. late). One chart per hand.
+
+Both attached to the Webex message alongside the Adaptive Card. Detailed design and layout in `plan/ai_preso_v2_jun_2026/04_charts_design.md`.
+
+**Critical files:**
+- `src/charts.py` — new file. Two functions: `render_session_trend(scale, history) → Path` and `render_finger_deviation(metrics) → Path`. Uses `matplotlib`. Output saved to `data/viz/`.
+- `src/webex_delivery.py` — attach PNGs via the Webex `files=` form field on `messages.create`.
+
+**Deferred:** the 2-octave piano keyboard with finger-highlight visualization. Beautiful but high-effort and not the story driver — charts cover the same insight with less work. Parallel track via Claude Design (see `plan/ai_preso_v2_jun_2026/keyboard_viz_prompt.md`); fold into Volume III if compelling.
+
+### P1.5.4 — Conversational Webex bot *(stretch within stretch — only if 1.5.1–1.5.3 land cleanly)*
+
+This is the original Phase 1.5: Webex bot → Workflows webhook → ngrok → local `/coach` → freeform agent → card reply. With P1.5.1–P1.5.3 in place, the bot reuses every primitive without new infrastructure beyond the bot/Workflows/ngrok wiring.
+
+Defer until summary mode and the keyboard viz are working.
 
 ---
 

@@ -232,3 +232,11 @@ logs/
 
 # Obsidian app config
 notes/.obsidian/
+.obsidian/
+
+# Data Files
+data/
+
+# Presnetation files 
+plan/ai_preso_v1_feb_2026/
+plan/ai_preso_v2_jun_2026/

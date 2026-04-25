@@ -46,6 +46,8 @@ Key metrics to reason about:
 - evenness_cv_pct: coefficient of variation — LOWER is better (more even timing)
 - evenness_std_ms: standard deviation of inter-note intervals in ms — LOWER is better
 - segment_index: segments within one session — later segments often show fatigue or warmup effects
+- get_finger_trends returns avg_deviation_ms per finger: POSITIVE = finger consistently lags,
+  NEGATIVE = finger consistently rushes. stdev_deviation_ms shows how consistent the timing is.
 
 After gathering enough context (3-5 tool calls is usually sufficient), write your coaching report.
 
@@ -57,6 +59,42 @@ Return ONLY a valid JSON object with exactly these fields — no markdown, no ex
   "suggested_next_session": "one concrete, actionable practice instruction",
   "trend": "improving | stable | needs_attention",
   "trend_detail": "1-2 sentences on the specific metric driving the trend assessment",
+  "milestone": "call out a personal best if one was set this session, otherwise empty string"
+}"""
+
+
+SUMMARY_SYSTEM_PROMPT = """You are an expert piano practice coach analyzing MULTIPLE REPETITIONS of one scale within a single practice session.
+
+The student played the same scale several times in this session. Your job is to coach across all the reps together, not just one.
+
+You have access to tools that query the student's full practice history in Splunk:
+- compare_hands(session_id) returns ALL segments of this session — filter the results to just the scale you're coaching on
+- get_scale_history(scale) gives the cross-session arc for the scale — useful for placing today in context
+- get_session_detail(session_id) returns per-note timing — useful for spotting which rep was the best
+- get_finger_trends(scale, hand) shows which fingers consistently lag or rush across history
+
+For summary coaching, communicate:
+- The BEST rep of the session (call out segment_index, BPM, evenness)
+- TYPICAL performance — what the student delivered most reps (speak in averages)
+- TREND WITHIN this session — did the player get faster/slower or more/less even across repetitions?
+  This is the fatigue-vs-warmup question. Compare first rep to last rep.
+- HISTORICAL trend — how today fits in the larger arc (improving, stable, needs attention)
+
+Reference specific reps when useful: "your 3rd rep set a session-best 286 BPM, but evenness slipped on rep 5".
+
+Key metrics to reason about:
+- speed_bpm: higher is faster. Typical beginner 120-200, advancing 200-300+
+- evenness_cv_pct: LOWER is better
+- get_finger_trends avg_deviation_ms: POSITIVE = lags, NEGATIVE = rushes; stdev shows consistency
+
+Return ONLY a valid JSON object with exactly these fields — no markdown, no explanation outside the JSON:
+{
+  "summary": "2-3 sentence assessment integrating best, typical, and trend",
+  "strengths": ["specific strength with rep reference if applicable", "..."],
+  "focus_areas": ["specific area, with finger numbers or hand if relevant", "..."],
+  "suggested_next_session": "one concrete, actionable practice instruction",
+  "trend": "improving | stable | needs_attention",
+  "trend_detail": "1-2 sentences covering both within-session trend and historical trend",
   "milestone": "call out a personal best if one was set this session, otherwise empty string"
 }"""
 
@@ -140,29 +178,15 @@ def get_latest_session_id() -> str | None:
     return None
 
 
-def run_coach(session_id: str | None = None) -> dict:
+def _run_agent_loop(system_prompt: str, user_message: str, max_iterations: int = 10) -> dict:
+    """Shared agent loop. Sends the prompt, executes tool calls, returns parsed JSON report."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
 
-    if not session_id:
-        print("No session_id provided — fetching most recent session...")
-        session_id = get_latest_session_id()
-        if not session_id:
-            raise RuntimeError("No real sessions found in Splunk (only TEST_ sessions)")
-
-    print(f"Coaching session: {session_id}")
-
     client = anthropic.Anthropic(api_key=api_key)
-    messages = [
-        {
-            "role": "user",
-            "content": f"Please analyze practice session {session_id} and provide coaching feedback."
-        }
-    ]
-
+    messages = [{"role": "user", "content": user_message}]
     tools = build_tools()
-    max_iterations = 10
     iteration = 0
 
     while iteration < max_iterations:
@@ -172,24 +196,19 @@ def run_coach(session_id: str | None = None) -> dict:
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=tools,
             messages=messages,
         )
-
-        # Add assistant response to message history
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
-            # Collect all text blocks into one string
             text = " ".join(
                 block.text for block in response.content if hasattr(block, "text")
             ).strip()
-
             if not text:
                 raise RuntimeError("Claude returned an empty final response")
 
-            # Strip markdown code fences if present
             if "```" in text:
                 parts = text.split("```")
                 for part in parts:
@@ -200,13 +219,11 @@ def run_coach(session_id: str | None = None) -> dict:
                         text = part
                         break
 
-            # Find the outermost JSON object in case of surrounding text
             start = text.find("{")
             end   = text.rfind("}") + 1
             if start == -1 or end == 0:
                 print(f"\n[debug] Raw Claude response:\n{text}")
                 raise RuntimeError("No JSON object found in Claude response")
-
             return json.loads(text[start:end])
 
         if response.stop_reason == "tool_use":
@@ -223,6 +240,32 @@ def run_coach(session_id: str | None = None) -> dict:
             messages.append({"role": "user", "content": tool_results})
 
     raise RuntimeError(f"Agent did not complete within {max_iterations} iterations")
+
+
+def run_coach(session_id: str | None = None) -> dict:
+    """Per-segment coaching — analyzes one session's most recent segment."""
+    if not session_id:
+        print("No session_id provided -- fetching most recent session...")
+        session_id = get_latest_session_id()
+        if not session_id:
+            raise RuntimeError("No real sessions found in Splunk (only TEST_ sessions)")
+
+    print(f"Coaching session: {session_id}")
+    return _run_agent_loop(
+        SYSTEM_PROMPT,
+        f"Please analyze practice session {session_id} and provide coaching feedback.",
+    )
+
+
+def run_coach_summary(session_id: str, scale: str) -> dict:
+    """Summary coaching — analyzes multiple reps of one scale within a session."""
+    print(f"Coaching summary: session {session_id}, scale {scale}")
+    return _run_agent_loop(
+        SUMMARY_SYSTEM_PROMPT,
+        f"In session {session_id}, the student played multiple repetitions of {scale}. "
+        f"Provide a summary coaching report covering the best rep, typical performance, "
+        f"the trend within the session, and how today fits in the historical arc.",
+    )
 
 
 if __name__ == "__main__":

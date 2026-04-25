@@ -334,23 +334,60 @@ def save_segment(seg, scales, index):
 # ── Coach trigger ─────────────────────────────────────────────────────────────
 
 def _maybe_run_coach(segment_session_id):
-    """Run coaching analysis and post to Webex after a segment completes."""
+    """Run per-segment coaching analysis and post to Webex."""
     if os.environ.get('AUTO_COACH', 'true').lower() != 'true':
         return
     if not os.environ.get('ANTHROPIC_API_KEY'):
-        print("  [coach] ANTHROPIC_API_KEY not set — skipping.")
+        print("  [coach] ANTHROPIC_API_KEY not set -- skipping.")
         return
     try:
         from coach_agent import run_coach
         from webex_delivery import post_card
-        print("  [coach] Analyzing session…")
+        print("  [coach] Analyzing session...")
         report = run_coach(segment_session_id)
         if os.environ.get('WEBEX_ROOM_ID'):
             post_card(report)
         else:
-            print("  [coach] WEBEX_ROOM_ID not set — skipping card delivery.")
+            print("  [coach] WEBEX_ROOM_ID not set -- skipping card delivery.")
     except Exception as e:
         print(f"  [coach] Error: {e}")
+
+
+def _run_session_summary(session_id, scales_played):
+    """Run one summary coaching analysis (with charts) per scale played in this session."""
+    if not scales_played:
+        return
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        print("  [summary] ANTHROPIC_API_KEY not set -- skipping.")
+        return
+    try:
+        from coach_agent import run_coach_summary
+        from webex_delivery import post_card
+        from charts import render_summary_panel
+        from mcp_server import _dispatch as mcp_dispatch
+        print(f"\n[summary] Analyzing {len(scales_played)} scale(s) from this session...")
+        for scale in scales_played:
+            try:
+                report = run_coach_summary(session_id, scale)
+
+                # Pull data for charts. Failures here shouldn't block card delivery.
+                panel_path = None
+                try:
+                    history    = mcp_dispatch("get_scale_history",  {"scale": scale})
+                    rh_trends  = mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "right"})
+                    lh_trends  = mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "left"})
+                    panel_path = render_summary_panel(scale, history, rh_trends, lh_trends, session_id)
+                except Exception as e:
+                    print(f"  [summary] Chart generation failed for {scale}: {e}")
+
+                if os.environ.get('WEBEX_ROOM_ID'):
+                    post_card(report, attachment=panel_path)
+                else:
+                    print("  [summary] WEBEX_ROOM_ID not set -- skipping card delivery.")
+            except Exception as e:
+                print(f"  [summary] Error coaching {scale}: {e}")
+    except Exception as e:
+        print(f"  [summary] Error: {e}")
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
@@ -373,12 +410,17 @@ def run_session(scales, max_minutes=5):
     publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
     publisher = HECPublisher() if publisher_type == 'hec' else MQTTPublisher()
 
+    summary_mode = os.environ.get('SUMMARY_MODE', 'false').lower() == 'true'
+    if summary_mode:
+        print("  [mode] SUMMARY_MODE=true -- one card per scale at session end (no per-segment cards)")
+
     lock = threading.Lock()
     state = {
         'segment': Segment(scales),
         'splitter': HandSplitter(),
         'gap_timer': None,
         'seg_count': 0,
+        'scales_played': [],   # ordered list of distinct scale names played
     }
 
     def process_and_reset():
@@ -390,19 +432,22 @@ def run_session(scales, max_minutes=5):
                 print_segment_results(seg, scales)
                 doc = save_segment(seg, scales, state['seg_count'])
                 publisher.publish_segment(doc, session_id)
+                if seg.scale_name and seg.scale_name not in state['scales_played']:
+                    state['scales_played'].append(seg.scale_name)
                 coach_session_id = session_id
             else:
                 ln = len(seg.lh_events)
                 rn = len(seg.rh_events)
                 if ln > 0 or rn > 0:
                     if ln == 0 or rn == 0:
-                        print(f"  [single hand only (LH:{ln} RH:{rn}) — discarded]")
+                        print(f"  [single hand only (LH:{ln} RH:{rn}) -- discarded]")
                     else:
-                        print(f"  [too short or no scale (LH:{ln} RH:{rn}) — discarded]")
+                        print(f"  [too short or no scale (LH:{ln} RH:{rn}) -- discarded]")
             # Splitter persists — hands already established
             state['segment'] = Segment(scales)
-        # Coach runs outside the lock — analysis takes 10-30s and must not block MIDI input
-        if coach_session_id:
+        # Per-segment coach runs outside the lock. Skipped in summary mode — one summary card per
+        # scale fires at session end instead. Analysis takes 10-30s and must not block MIDI input.
+        if coach_session_id and not summary_mode:
             _maybe_run_coach(coach_session_id)
 
     def on_gap():
@@ -459,6 +504,12 @@ def run_session(scales, max_minutes=5):
     process_and_reset()
     publisher.disconnect()
     print(f"\nSession complete. {state['seg_count']} segment(s) saved to data/sessions/")
+
+    # Summary coaching: one card per scale-type at session end
+    if summary_mode and state['scales_played']:
+        # Brief pause to let HEC events index in Splunk before MCP queries
+        time.sleep(3)
+        _run_session_summary(session_id, state['scales_played'])
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
