@@ -181,7 +181,7 @@ def post_card(report: dict) -> None:
     with urllib.request.urlopen(req) as resp:
         result = json.loads(resp.read())
 
-    print(f"  [webex] Card posted — message id: {result.get('id', '?')}")
+    print(f"  [webex] Card posted -- message id: {result.get('id', '?')}")
 
 
 if __name__ == "__main__":

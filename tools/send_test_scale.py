@@ -1,5 +1,5 @@
 """
-send_test_scale.py — Sends a simulated C major scale to MQTT without a piano.
+send_test_scale.py — Sends a simulated C major scale without a piano.
 
 Publishes exactly what practice_session.py would publish for one valid segment:
   - 15 piano/notes messages per hand (2-octave C major scale, RH then LH)
@@ -9,8 +9,9 @@ Usage:
     python tools/send_test_scale.py
 
 Uses the same env vars as the live session:
-    MQTT_HOST  (default: 100.127.43.4)
-    MQTT_PORT  (default: 1883)
+    PUBLISHER_TYPE  hec (default) or mqtt
+    SPLUNK_HEC_URL / SPLUNK_HEC_TOKEN  (for hec)
+    MQTT_HOST / MQTT_PORT              (for mqtt)
 """
 
 import json
@@ -21,6 +22,7 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / 'src'))
 from mqtt_publisher import MQTTPublisher
+from hec_publisher import HECPublisher
 
 # C major 2-octave scale starting at C4 (MIDI 60) for RH, C3 (MIDI 48) for LH
 RH_MIDI = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 84]
@@ -74,12 +76,15 @@ def main():
     session_id = time.strftime('TEST_%Y%m%d_%H%M%S')
     print(f"Test session: {session_id}")
 
-    pub = MQTTPublisher()
-    time.sleep(1.0)  # allow connection to establish
-
-    if not pub.connected:
-        print("Could not connect to MQTT broker — check MQTT_HOST/MQTT_PORT env vars.")
-        sys.exit(1)
+    publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
+    if publisher_type == 'hec':
+        pub = HECPublisher()
+    else:
+        pub = MQTTPublisher()
+        time.sleep(1.0)  # allow MQTT connection to establish
+        if not pub.connected:
+            print("Could not connect to MQTT broker — check MQTT_HOST/MQTT_PORT env vars.")
+            sys.exit(1)
 
     rh_notes = build_notes(RH_MIDI, RH_FINGERS)
     lh_notes = build_notes(LH_MIDI, LH_FINGERS)

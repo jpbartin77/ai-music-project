@@ -19,8 +19,14 @@ import threading
 import numpy as np
 from datetime import datetime
 import sys, pathlib
+
+# Allow Unicode arrows, em-dashes, etc. in print statements on Windows (cp1252 default would crash)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from mqtt_publisher import MQTTPublisher
+from hec_publisher import HECPublisher
 
 NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
 FINGER_NAMES = {1: "Thumb", 2: "Index", 3: "Middle", 4: "Ring", 5: "Pinky"}
@@ -325,6 +331,28 @@ def save_segment(seg, scales, index):
     return doc
 
 
+# ── Coach trigger ─────────────────────────────────────────────────────────────
+
+def _maybe_run_coach(segment_session_id):
+    """Run coaching analysis and post to Webex after a segment completes."""
+    if os.environ.get('AUTO_COACH', 'true').lower() != 'true':
+        return
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        print("  [coach] ANTHROPIC_API_KEY not set — skipping.")
+        return
+    try:
+        from coach_agent import run_coach
+        from webex_delivery import post_card
+        print("  [coach] Analyzing session…")
+        report = run_coach(segment_session_id)
+        if os.environ.get('WEBEX_ROOM_ID'):
+            post_card(report)
+        else:
+            print("  [coach] WEBEX_ROOM_ID not set — skipping card delivery.")
+    except Exception as e:
+        print(f"  [coach] Error: {e}")
+
+
 # ── Session ───────────────────────────────────────────────────────────────────
 
 def run_session(scales, max_minutes=5):
@@ -342,7 +370,8 @@ def run_session(scales, max_minutes=5):
     start_time = time.perf_counter()
     session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-    publisher = MQTTPublisher()
+    publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
+    publisher = HECPublisher() if publisher_type == 'hec' else MQTTPublisher()
 
     lock = threading.Lock()
     state = {
@@ -353,6 +382,7 @@ def run_session(scales, max_minutes=5):
     }
 
     def process_and_reset():
+        coach_session_id = None
         with lock:
             seg = state['segment']
             if seg.is_useful():
@@ -360,6 +390,7 @@ def run_session(scales, max_minutes=5):
                 print_segment_results(seg, scales)
                 doc = save_segment(seg, scales, state['seg_count'])
                 publisher.publish_segment(doc, session_id)
+                coach_session_id = session_id
             else:
                 ln = len(seg.lh_events)
                 rn = len(seg.rh_events)
@@ -370,6 +401,9 @@ def run_session(scales, max_minutes=5):
                         print(f"  [too short or no scale (LH:{ln} RH:{rn}) — discarded]")
             # Splitter persists — hands already established
             state['segment'] = Segment(scales)
+        # Coach runs outside the lock — analysis takes 10-30s and must not block MIDI input
+        if coach_session_id:
+            _maybe_run_coach(coach_session_id)
 
     def on_gap():
         process_and_reset()
