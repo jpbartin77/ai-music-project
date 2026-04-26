@@ -85,17 +85,17 @@ Verify the gateway IP matches your AnyConnect adapter — it's dynamic. See `not
 
 ### Running the pipeline
 
+> Behavioral toggles (`SUMMARY_MODE`, `AUTO_COACH`, `PUBLISHER_TYPE`) are intentionally NOT in `.env.tpl` — `op run --env-file=...` would otherwise inject those values *over* whatever you set in PowerShell. Set them in the shell *before* `op run`. Defaults live in the Python code.
+
 **Default mode — per-segment cards (one Webex card after each scale played):**
-```bash
+```powershell
 op run --env-file=.env.tpl -- python src/practice_session.py
 ```
 
 **Summary mode — one card per scale-type at session end (with charts):**
-```bash
-SUMMARY_MODE=true op run --env-file=.env.tpl -- python src/practice_session.py
+```powershell
+$env:SUMMARY_MODE="true"; op run --env-file=.env.tpl -- python src/practice_session.py
 ```
-
-(PowerShell equivalent: `$env:SUMMARY_MODE="true"; op run ...`)
 
 After Ctrl+C, the script:
 1. Processes the final segment
@@ -103,12 +103,12 @@ After Ctrl+C, the script:
 3. For each distinct scale played, runs `run_coach_summary()` and posts an Adaptive Card + chart panel to Webex
 
 **Suppress automatic coaching entirely (data still goes to Splunk):**
-```bash
-AUTO_COACH=false op run --env-file=.env.tpl -- python src/practice_session.py
+```powershell
+$env:AUTO_COACH="false"; op run --env-file=.env.tpl -- python src/practice_session.py
 ```
 
 **Run the coach manually after the fact:**
-```bash
+```powershell
 # Most recent session, per-segment style:
 op run --env-file=.env.tpl -- python src/coach_agent.py
 
@@ -118,7 +118,7 @@ op run --env-file=.env.tpl -- python src/coach_agent.py 20260425_082219
 
 ### Smoke tests (no piano needed)
 
-```bash
+```powershell
 # Push synthetic test scale events to Splunk:
 op run --env-file=.env.tpl -- python tools/send_test_scale.py
 
@@ -128,7 +128,7 @@ op run --env-file=.env.tpl -- python tools/test_mcp_tools.py
 
 ### Generating charts standalone (without sending to Webex)
 
-```bash
+```powershell
 op run --env-file=.env.tpl -- .venv/Scripts/python.exe -c "
 import sys; sys.path.insert(0, 'src')
 from charts import render_summary_panel
@@ -146,20 +146,30 @@ print(render_summary_panel(
 
 PNGs land in `data/viz/<session_id>_<scale>_summary.png`.
 
-### Environment variables (in `.env.tpl`)
+### Environment variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `PUBLISHER_TYPE` | `hec` | `hec` or `mqtt` (legacy MQTT path still works) |
-| `AUTO_COACH` | `true` | Set `false` to fully suppress coaching |
-| `SUMMARY_MODE` | `false` | Set `true` for end-of-session summary cards (one per scale) |
+**In `.env.tpl`** — endpoints, tokens, and other config that's stable per-environment:
+
+| Variable | Source | Purpose |
+|----------|--------|---------|
 | `SPLUNK_HEC_URL` | dCloud HEC | Splunk HEC ingest endpoint |
 | `SPLUNK_HEC_TOKEN` | 1P ref | HEC auth token |
 | `SPLUNK_URL` | dCloud REST | Splunk REST API (port 8089) |
 | `SPLUNK_TOKEN` | 1P ref | REST API authentication token |
+| `SPLUNK_INDEX` | hardcoded | `edge_hub_mqtt` |
 | `WEBEX_BOT_TOKEN` | 1P ref | Webex bot token |
 | `WEBEX_ROOM_ID` | hardcoded | The space cards get posted to |
 | `ANTHROPIC_API_KEY` | 1P ref | Claude API key |
+
+**Behavioral toggles** — set in the shell *before* `op run`, defaults defined in code:
+
+| Variable | Code default | Purpose |
+|----------|--------------|---------|
+| `PUBLISHER_TYPE` | `hec` | `hec` or `mqtt` (legacy path) |
+| `AUTO_COACH` | `true` | Set `false` to fully suppress coaching |
+| `SUMMARY_MODE` | `false` | Set `true` for end-of-session summary cards (one per scale) |
+
+> ⚠️ Don't put toggles in `.env.tpl` — `op run --env-file=...` injects values from the file *over* whatever you set in PowerShell, so a hardcoded `SUMMARY_MODE=false` in the file would silently override `$env:SUMMARY_MODE="true"`.
 
 ---
 

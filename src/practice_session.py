@@ -9,6 +9,8 @@ Segments are separated by 2-second silences. Single-hand segments are
 discarded. Output is one JSON file per valid segment in data/sessions/.
 """
 
+import argparse
+import queue
 import rtmidi
 import mido
 import time
@@ -20,13 +22,28 @@ import numpy as np
 from datetime import datetime
 import sys, pathlib
 
-# Allow Unicode arrows, em-dashes, etc. in print statements on Windows (cp1252 default would crash)
-if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+# Force UTF-8 and line-buffering so prints appear immediately even when stdout is piped via op run
+sys.stdout.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from mqtt_publisher import MQTTPublisher
 from hec_publisher import HECPublisher
+from demo_emitter import emit as _emit
+
+# Eagerly import the coach modules at startup. Their transitive imports (mcp → jsonschema →
+# rfc3987_syntax → lark grammar compilation) take a few seconds the first time. Doing it here
+# means the cost is paid before MIDI capture starts, not at session end where the user expects
+# fast summary delivery.
+_auto_coach   = os.environ.get('AUTO_COACH', 'true').lower() == 'true'
+_summary_mode = os.environ.get('SUMMARY_MODE', 'true').lower() == 'true'
+if _auto_coach or _summary_mode:
+    print("Loading coaching modules...", flush=True)
+    from coach_agent    import run_coach, run_coach_summary
+    from webex_delivery import post_card, post_analyzing_notice
+    from charts         import render_summary_panel
+    from mcp_server     import _dispatch as _mcp_dispatch
+else:
+    run_coach = run_coach_summary = post_card = post_analyzing_notice = render_summary_panel = _mcp_dispatch = None
 
 NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
 FINGER_NAMES = {1: "Thumb", 2: "Index", 3: "Middle", 4: "Ring", 5: "Pinky"}
@@ -304,13 +321,14 @@ def print_segment_results(seg, scales):
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 
-def save_segment(seg, scales, index):
+def save_segment(seg, scales, index, session_id=None):
     os.makedirs('data/sessions', exist_ok=True)
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    base = f"data/sessions/{ts}_seg{index:02d}_{seg.scale_name}"
+    prefix = session_id or datetime.now().strftime('%Y%m%d_%H%M%S')
+    base = f"data/sessions/{prefix}_seg{index:02d}_{seg.scale_name}"
     scale = scales[seg.scale_name]
 
     doc = {
+        'session_id': session_id,
         'timestamp': datetime.now().isoformat(),
         'scale': seg.scale_name,
         'scale_display': scale['display'],
@@ -335,14 +353,12 @@ def save_segment(seg, scales, index):
 
 def _maybe_run_coach(segment_session_id):
     """Run per-segment coaching analysis and post to Webex."""
-    if os.environ.get('AUTO_COACH', 'true').lower() != 'true':
+    if not _auto_coach:
         return
     if not os.environ.get('ANTHROPIC_API_KEY'):
         print("  [coach] ANTHROPIC_API_KEY not set -- skipping.")
         return
     try:
-        from coach_agent import run_coach
-        from webex_delivery import post_card
         print("  [coach] Analyzing session...")
         report = run_coach(segment_session_id)
         if os.environ.get('WEBEX_ROOM_ID'):
@@ -360,39 +376,36 @@ def _run_session_summary(session_id, scales_played):
     if not os.environ.get('ANTHROPIC_API_KEY'):
         print("  [summary] ANTHROPIC_API_KEY not set -- skipping.")
         return
-    try:
-        from coach_agent import run_coach_summary
-        from webex_delivery import post_card
-        from charts import render_summary_panel
-        from mcp_server import _dispatch as mcp_dispatch
-        print(f"\n[summary] Analyzing {len(scales_played)} scale(s) from this session...")
-        for scale in scales_played:
+    print(f"\n[summary] Analyzing {len(scales_played)} scale(s) from this session...")
+    for scale in scales_played:
+        try:
+            _emit('coach_started', scale=scale)
+            report = run_coach_summary(session_id, scale)
+
+            # Pull data for charts. Failures here shouldn't block card delivery.
+            panel_path = None
             try:
-                report = run_coach_summary(session_id, scale)
-
-                # Pull data for charts. Failures here shouldn't block card delivery.
-                panel_path = None
-                try:
-                    history    = mcp_dispatch("get_scale_history",  {"scale": scale})
-                    rh_trends  = mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "right"})
-                    lh_trends  = mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "left"})
-                    panel_path = render_summary_panel(scale, history, rh_trends, lh_trends, session_id)
-                except Exception as e:
-                    print(f"  [summary] Chart generation failed for {scale}: {e}")
-
-                if os.environ.get('WEBEX_ROOM_ID'):
-                    post_card(report, attachment=panel_path)
-                else:
-                    print("  [summary] WEBEX_ROOM_ID not set -- skipping card delivery.")
+                history    = _mcp_dispatch("get_scale_history",  {"scale": scale})
+                _emit('mcp_query', scale=scale)
+                rh_trends  = _mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "right"})
+                lh_trends  = _mcp_dispatch("get_finger_trends",  {"scale": scale, "hand": "left"})
+                panel_path = render_summary_panel(scale, history, rh_trends, lh_trends, session_id)
+                _emit('chart_generated', scale=scale)
             except Exception as e:
-                print(f"  [summary] Error coaching {scale}: {e}")
-    except Exception as e:
-        print(f"  [summary] Error: {e}")
+                print(f"  [summary] Chart generation failed for {scale}: {e}")
+
+            if os.environ.get('WEBEX_ROOM_ID'):
+                post_card(report, attachment=panel_path)
+                _emit('webex_sent', scale=scale)
+            else:
+                print("  [summary] WEBEX_ROOM_ID not set -- skipping card delivery.")
+        except Exception as e:
+            print(f"  [summary] Error coaching {scale}: {e}")
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
 
-def run_session(scales, max_minutes=5):
+def run_session(scales, max_minutes=5, summary=True):
     midi_in = rtmidi.MidiIn()
     ports = midi_in.get_ports()
     if not ports:
@@ -401,18 +414,41 @@ def run_session(scales, max_minutes=5):
 
     print(f"\nConnected: {ports[0]}")
     print(f"Play any major scale with both hands.")
-    print(f"2-second pause ends each run. Ctrl+C to finish.\n")
+    print(f"2-second pause ends each run. Press A0 (lowest key) or Ctrl+C to finish.\n")
 
     midi_in.open_port(0)
     start_time = time.perf_counter()
     session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+    _emit('session_started', session_id=session_id)
 
     publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
     publisher = HECPublisher() if publisher_type == 'hec' else MQTTPublisher()
+    stop_event = threading.Event()
 
-    summary_mode = os.environ.get('SUMMARY_MODE', 'false').lower() == 'true'
+    summary_mode = summary
     if summary_mode:
-        print("  [mode] SUMMARY_MODE=true -- one card per scale at session end (no per-segment cards)")
+        print("  [mode] summary mode -- one card per scale at session end (no per-segment cards)")
+
+    # ── Non-blocking publish queue ────────────────────────────────────────────
+    # All HEC POSTs run in a background thread so the MIDI callback never stalls
+    # waiting on network. The queue drainer flushes before the session exits.
+    _pub_q = queue.Queue()
+
+    def _publish_worker():
+        while True:
+            item = _pub_q.get()
+            if item is None:        # poison pill — drain complete
+                _pub_q.task_done()
+                break
+            kind, args = item
+            if kind == 'note':
+                publisher.publish_note(*args)
+            elif kind == 'segment':
+                publisher.publish_segment(*args)
+            _pub_q.task_done()
+
+    _pub_thread = threading.Thread(target=_publish_worker, daemon=True, name='hec-publisher')
+    _pub_thread.start()
 
     lock = threading.Lock()
     state = {
@@ -424,31 +460,41 @@ def run_session(scales, max_minutes=5):
     }
 
     def process_and_reset():
-        coach_session_id = None
+        seg_snapshot = None
+        seg_index = None
+        discard_msg = None
+
         with lock:
             seg = state['segment']
             if seg.is_useful():
                 state['seg_count'] += 1
-                print_segment_results(seg, scales)
-                doc = save_segment(seg, scales, state['seg_count'])
-                publisher.publish_segment(doc, session_id)
+                seg_snapshot = seg
+                seg_index = state['seg_count']
                 if seg.scale_name and seg.scale_name not in state['scales_played']:
                     state['scales_played'].append(seg.scale_name)
-                coach_session_id = session_id
             else:
                 ln = len(seg.lh_events)
                 rn = len(seg.rh_events)
                 if ln > 0 or rn > 0:
                     if ln == 0 or rn == 0:
-                        print(f"  [single hand only (LH:{ln} RH:{rn}) -- discarded]")
+                        discard_msg = f"  [single hand only (LH:{ln} RH:{rn}) -- discarded]"
                     else:
-                        print(f"  [too short or no scale (LH:{ln} RH:{rn}) -- discarded]")
-            # Splitter persists — hands already established
+                        discard_msg = f"  [too short or no scale (LH:{ln} RH:{rn}) -- discarded]"
             state['segment'] = Segment(scales)
-        # Per-segment coach runs outside the lock. Skipped in summary mode — one summary card per
-        # scale fires at session end instead. Analysis takes 10-30s and must not block MIDI input.
-        if coach_session_id and not summary_mode:
-            _maybe_run_coach(coach_session_id)
+
+        # All I/O outside the lock: print, disk write, queue — none of these block MIDI
+        if discard_msg:
+            print(discard_msg)
+        if seg_snapshot is not None:
+            print_segment_results(seg_snapshot, scales)
+            doc = save_segment(seg_snapshot, scales, seg_index, session_id)
+            _pub_q.put(('segment', (doc, session_id)))
+            rh_bpm = doc.get('metrics', {}).get('right', {}) or {}
+            _emit('segment_complete',
+                  index=seg_index, scale=seg_snapshot.scale_name,
+                  rh_bpm=round(rh_bpm.get('speed_bpm', 0), 1))
+            if not summary_mode:
+                _maybe_run_coach(session_id)
 
     def on_gap():
         process_and_reset()
@@ -463,12 +509,24 @@ def run_session(scales, max_minutes=5):
 
     def callback(message, _=None):
         msg, _ = message
-        if msg[0] != 144 or msg[2] == 0:   # NOTE_ON with velocity > 0 only
+        if msg[0] & 0xF0 != 0x90:   # NOTE_ON on any channel
             return
 
         midi = msg[1]
+
+        if midi == 21:  # A0 — stop session (check before velocity filter)
+            print("\n  [A0 pressed — ending session...]")
+            _emit('session_ended', segments=state['seg_count'])
+            stop_event.set()
+            return
+
+        if msg[2] == 0:             # velocity=0 is a note-off
+            return
+
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
+        note_lines = []
+        note_publishes = []
         with lock:
             assignments = state['splitter'].assign(midi, elapsed_ms)
             for note_midi, hand, note_time in assignments:
@@ -481,18 +539,33 @@ def run_session(scales, max_minutes=5):
                 state['segment'].add(event, hand)
                 finger = event.get('finger')
                 flabel = FINGER_NAMES.get(finger, '?') if finger else '?'
-                print(f"  ♪ {note_name(note_midi):<4} {hand[0].upper()}H  "
-                      f"finger:{flabel:<8}  t:{note_time:8.0f}ms")
-                publisher.publish_note(
-                    event, hand, state['segment'].scale_name or 'unknown', session_id
+                note_lines.append(
+                    f"  ♪ {note_name(note_midi):<4} {hand[0].upper()}H  "
+                    f"finger:{flabel:<8}  t:{note_time:8.0f}ms"
                 )
+                note_publishes.append(
+                    (dict(event), hand, state['segment'].scale_name or 'unknown')
+                )
+
+        # All I/O outside the lock: terminal writes and queue puts are non-blocking
+        for line in note_lines:
+            print(line)
+        for (ev_dict, hand, scale_name), line in zip(note_publishes, note_lines):
+            _pub_q.put(('note', (ev_dict, hand, scale_name, session_id)))
+            _emit('note_played', note=ev_dict['name'], hand=hand,
+                  finger=ev_dict.get('finger'), scale=scale_name)
 
         reset_gap_timer()
 
     midi_in.set_callback(callback)
 
+    deadline = start_time + max_minutes * 60
     try:
-        time.sleep(max_minutes * 60)
+        while not stop_event.is_set():
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            stop_event.wait(timeout=min(0.5, remaining))
     except KeyboardInterrupt:
         pass
 
@@ -500,13 +573,17 @@ def run_session(scales, max_minutes=5):
         state['gap_timer'].cancel()
     midi_in.close_port()
 
-    # Process any final segment
+    # Process any final segment, then flush pending HEC posts (max 10s)
     process_and_reset()
+    _pub_q.put(None)                    # poison pill
+    _pub_thread.join(timeout=10)        # don't hang forever if Splunk is slow
     publisher.disconnect()
     print(f"\nSession complete. {state['seg_count']} segment(s) saved to data/sessions/")
 
     # Summary coaching: one card per scale-type at session end
     if summary_mode and state['scales_played']:
+        if post_analyzing_notice and os.environ.get('WEBEX_ROOM_ID'):
+            post_analyzing_notice(state['scales_played'])
         # Brief pause to let HEC events index in Splunk before MCP queries
         time.sleep(3)
         _run_session_summary(session_id, state['scales_played'])
@@ -515,8 +592,14 @@ def run_session(scales, max_minutes=5):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Scale practice session')
+    parser.add_argument('--minutes', '-m', type=int, default=5,
+                        help='Session duration in minutes (default: 5)')
+    parser.add_argument('--summary', action=argparse.BooleanOptionalAction, default=True,
+                        help='Generate summary card at session end (default: on)')
+    args = parser.parse_args()
+
     print('=== Scale Practice Session ===\n')
     scales = load_fingerings()
     print(f"Loaded {len(scales)} scales from {FINGERINGS_PATH}\n")
-    minutes = int(input('Max session minutes [5]: ').strip() or 5)
-    run_session(scales, max_minutes=minutes)
+    run_session(scales, max_minutes=args.minutes, summary=args.summary)

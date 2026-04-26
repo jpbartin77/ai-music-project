@@ -16,6 +16,8 @@ nothing meaningful to draw).
 
 from __future__ import annotations
 
+import glob
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -24,8 +26,10 @@ matplotlib.use("Agg")  # no GUI; runs headless
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+# Resolved at import time so glob works regardless of cwd
+_SESSIONS_DIR = Path(__file__).parent.parent / "data" / "sessions"
 
-VIZ_DIR = Path("data/viz")
+VIZ_DIR = Path(__file__).parent.parent / "data" / "viz"
 FINGER_NAMES = {1: "Thumb", 2: "Index", 3: "Middle", 4: "Ring", 5: "Pinky"}
 
 # Color thresholds for deviation magnitude (ms)
@@ -56,72 +60,87 @@ def _deviation_color(deviation_ms: float) -> str:
 
 # ── Internal plotters (operate on given axes) ─────────────────────────────────
 
-def _plot_session_trend(ax_bpm, scale: str, history: list[dict], session_id: str | None) -> bool:
-    """Plot speed/evenness trend on the given axes. Returns False if nothing drawn."""
-    if not history:
+def _plot_scale_runs(ax, scale: str, session_id: str | None) -> bool:
+    """
+    Plot per-note BPM for each scale run in the current session.
+
+    X-axis: note names in ascending-then-descending order (C4 D4 … C6 … D4 C4).
+    Y-axis: BPM at each note transition (60000 / IOI_ms).
+    One colored line per segment; averaged across both hands when lengths match.
+
+    Returns False if no segment files are found.
+    """
+    if not session_id:
         return False
 
-    rows = []
-    for r in history:
-        t = r.get("time")
-        if not t:
-            continue
-        try:
-            ts = datetime.fromisoformat(t.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            continue
-        rh_bpm = _safe_float(r.get("rh_speed_bpm"))
-        lh_bpm = _safe_float(r.get("lh_speed_bpm"))
-        rh_cv  = _safe_float(r.get("rh_evenness_cv_pct"))
-        lh_cv  = _safe_float(r.get("lh_evenness_cv_pct"))
-        avg_bpm = (rh_bpm + lh_bpm) / 2 if (rh_bpm and lh_bpm) else (rh_bpm or lh_bpm)
-        avg_cv  = (rh_cv + lh_cv) / 2 if (rh_cv and lh_cv) else (rh_cv or lh_cv)
-        rows.append({"time": ts, "session_id": r.get("session_id", ""), "bpm": avg_bpm, "cv": avg_cv})
-
-    if not rows:
+    pattern = str(_SESSIONS_DIR / f"{session_id}_seg*_{scale}.json")
+    seg_files = sorted(glob.glob(pattern))
+    if not seg_files:
         return False
 
-    rows.sort(key=lambda x: x["time"])
-    times = [r["time"] for r in rows]
-    bpms  = [r["bpm"] for r in rows]
-    cvs   = [r["cv"]  for r in rows]
+    PALETTE = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    ]
 
-    ax_cv = ax_bpm.twinx()
+    x_labels = None   # note-name labels from the first usable run
+    drew_any = False
 
-    ax_bpm.plot(times, bpms, color="#1f77b4", linewidth=2.0, marker="o", markersize=4, label="Speed (BPM)")
-    ax_cv.plot(times, cvs,  color="#ff7f0e", linewidth=1.8, linestyle="--", marker="s", markersize=4, label="CV%")
+    for run_idx, seg_file in enumerate(seg_files):
+        with open(seg_file) as fh:
+            seg = json.load(fh)
 
-    ax_bpm.set_ylabel("Speed (BPM)", color="#1f77b4", fontsize=9)
-    ax_cv.set_ylabel("Evenness CV%", color="#ff7f0e", fontsize=9)
-    ax_bpm.tick_params(axis="y", labelcolor="#1f77b4", labelsize=8)
-    ax_cv.tick_params(axis="y",  labelcolor="#ff7f0e", labelsize=8)
-    ax_bpm.tick_params(axis="x", labelsize=8)
+        rh = seg.get("notes", {}).get("right", [])
+        lh = seg.get("notes", {}).get("left", [])
 
-    if session_id:
-        for r in rows:
-            if r["session_id"] == session_id:
-                ax_bpm.plot(r["time"], r["bpm"], marker="o", markersize=10,
-                            markerfacecolor="none", markeredgecolor="#1f77b4", markeredgewidth=2)
-                ax_bpm.annotate("this session", (r["time"], r["bpm"]),
-                                xytext=(8, 8), textcoords="offset points",
-                                fontsize=8, color="#444")
-                break
-
-    if len(times) > 1:
-        span = times[-1] - times[0]
-        if span.total_seconds() < 24 * 3600:
-            ax_bpm.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        # Use both hands if they match length, otherwise the longer one
+        if len(rh) == len(lh) and len(rh) >= 4:
+            rh_iois = [rh[j]["time_ms"] - rh[j-1]["time_ms"] for j in range(1, len(rh))]
+            lh_iois = [lh[j]["time_ms"] - lh[j-1]["time_ms"] for j in range(1, len(lh))]
+            iois    = [(a + b) / 2 for a, b in zip(rh_iois, lh_iois)]
+            labels  = [rh[j]["name"] for j in range(1, len(rh))]
         else:
-            ax_bpm.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
-        for label in ax_bpm.get_xticklabels():
-            label.set_rotation(20)
-            label.set_horizontalalignment("right")
+            events = rh if len(rh) >= len(lh) else lh
+            if len(events) < 4:
+                continue
+            iois   = [events[j]["time_ms"] - events[j-1]["time_ms"] for j in range(1, len(events))]
+            labels = [events[j]["name"] for j in range(1, len(events))]
 
-    title = scale.replace("_", " ").title() + " — recent sessions"
-    ax_bpm.set_title(title, fontsize=11, fontweight="bold")
-    ax_bpm.grid(True, alpha=0.25)
-    ax_bpm.spines["top"].set_visible(False)
-    ax_cv.spines["top"].set_visible(False)
+        bpms = [60000 / ioi for ioi in iois if ioi > 0]
+        if not bpms:
+            continue
+
+        if x_labels is None:
+            x_labels = labels
+
+        xs = list(range(len(bpms)))
+        ax.plot(xs, bpms,
+                color=PALETTE[run_idx % len(PALETTE)],
+                linewidth=1.6, marker="o", markersize=3,
+                label=f"Run {run_idx + 1}", alpha=0.88)
+        drew_any = True
+
+    if not drew_any or x_labels is None:
+        return False
+
+    # X-axis: note names, every other label to avoid crowding
+    xs_all = list(range(len(x_labels)))
+    ax.set_xticks(xs_all)
+    tick_labels = [n if i % 2 == 0 else "" for i, n in enumerate(x_labels)]
+    ax.set_xticklabels(tick_labels, fontsize=7, rotation=60, ha="right")
+
+    ax.set_ylabel("Speed (BPM)", fontsize=9)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}"))
+
+    scale_display = scale.replace("_", " ").title()
+    ax.set_title(f"{scale_display} — speed per note, this session",
+                 fontsize=11, fontweight="bold")
+    ncols = min(len(seg_files), 5)
+    ax.legend(fontsize=8, loc="upper right", ncol=ncols, framealpha=0.7)
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     return True
 
 
@@ -174,9 +193,10 @@ def _plot_finger_deviation(ax, scale: str, rh_trends: list[dict], lh_trends: lis
 
 # ── Public renderers ──────────────────────────────────────────────────────────
 
-def render_session_trend(scale: str, history: list[dict], session_id: str | None = None) -> Path | None:
-    fig, ax = plt.subplots(figsize=(6.4, 2.4), dpi=120)
-    if not _plot_session_trend(ax, scale, history, session_id):
+def render_session_trend(scale: str, session_id: str | None = None) -> Path | None:
+    """Standalone render of the per-note speed chart for a session."""
+    fig, ax = plt.subplots(figsize=(6.4, 2.6), dpi=120)
+    if not _plot_scale_runs(ax, scale, session_id):
         plt.close(fig)
         return None
     fig.tight_layout()
@@ -210,26 +230,27 @@ def render_summary_panel(scale: str,
                          lh_trends: list[dict],
                          session_id: str | None = None) -> Path | None:
     """
-    Combined PNG: session-trend chart on top, per-finger deviation on bottom.
+    Combined PNG: per-note speed chart on top, per-finger deviation on bottom.
     This is what gets attached to the Webex summary card.
 
     Returns None if neither sub-chart has data.
     """
     finger_count = len((rh_trends or []) + (lh_trends or []))
     finger_h = max(2.4, 0.35 * finger_count + 0.8)
-    total_h = 2.6 + finger_h
+    trend_h  = 2.6
+    total_h  = trend_h + finger_h
 
     fig, (ax_trend, ax_finger) = plt.subplots(
         2, 1, figsize=(6.4, total_h), dpi=120,
-        gridspec_kw={"height_ratios": [2.6, finger_h]},
+        gridspec_kw={"height_ratios": [trend_h, finger_h]},
     )
 
-    drew_trend  = _plot_session_trend(ax_trend, scale, history, session_id)
+    drew_trend  = _plot_scale_runs(ax_trend, scale, session_id)
     drew_finger = _plot_finger_deviation(ax_finger, scale, rh_trends, lh_trends)
 
     if not drew_trend:
         ax_trend.set_axis_off()
-        ax_trend.text(0.5, 0.5, "no historical data yet — first session for this scale",
+        ax_trend.text(0.5, 0.5, "no session data found",
                       ha="center", va="center", fontsize=10, color="#666",
                       transform=ax_trend.transAxes)
     if not drew_finger:

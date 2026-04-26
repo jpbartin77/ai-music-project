@@ -194,6 +194,29 @@ def _post_file(room_id: str, file_path: Path, markdown: str) -> dict:
     return resp.json()
 
 
+def post_analyzing_notice(scales: list[str]) -> None:
+    """Post a plain-text 'analyzing...' message immediately after session ends."""
+    room_id = os.environ.get("WEBEX_ROOM_ID", "")
+    if not room_id:
+        return
+    scale_names = ", ".join(s.replace("_", " ").title() for s in scales)
+    text = (f"🎹 Practice session ended — analyzing {len(scales)} scale(s): "
+            f"{scale_names}. Report coming shortly...")
+    payload = json.dumps({"roomId": room_id, "text": text}).encode()
+    req = urllib.request.Request(
+        f"{WEBEX_API}/messages",
+        data=payload,
+        headers=_headers(),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read())
+        print(f"  [webex] Analyzing notice posted -- message id: {result.get('id', '?')}")
+    except Exception as e:
+        print(f"  [webex] Analyzing notice failed: {e}")
+
+
 def post_card(report: dict, attachment: Path | str | None = None) -> None:
     """
     Post the coaching Adaptive Card to Webex.

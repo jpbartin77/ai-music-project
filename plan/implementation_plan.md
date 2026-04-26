@@ -251,10 +251,51 @@ flowchart TD
 
 ---
 
+## Refactor Backlog
+*Things worth doing eventually, not blocking anything today. Listed with their natural trigger.*
+
+### R1 — Behavioral toggles: env vars → CLI flags
+
+Today, `SUMMARY_MODE`, `AUTO_COACH`, `PUBLISHER_TYPE` are read from the environment. This works, but for a script run interactively (and demoed on stage), CLI flags would be more discoverable and visually obvious.
+
+**What:** add `argparse` to `src/practice_session.py` and `src/coach_agent.py`. Flags override env vars override code defaults — keeps backward compatibility with the env-var path used in automation.
+
+**Why:** self-documenting (`--help`), no hidden state on stage, more idiomatic for an interactive tool.
+
+**When:** any time. Low priority — current env-var path works.
+
+### R2 — Extract a unified coach API
+
+Today, the CLI imports `run_coach()` and `run_coach_summary()` directly. The MCP server is a separate API surface. The eventual Webex bot, web UI, and any future client would each need their own integration path.
+
+**What:** wrap the coaching surface (`run_coach`, `run_coach_summary`, possibly freeform queries) in a Flask/FastAPI service. CLI calls the API; agent (via MCP) calls the API; Webex bot calls the API. `src/cloud_run_app.py` is the parked starting point — it already has the `/coach` endpoint.
+
+**Why:** single source of truth for the coaching logic; new clients become thin shims; aligns with the Phase 2.1 cloud MCP architecture and the parked Cloud Run plan.
+
+**Caveat:** adds operational complexity now (start the service before running the CLI). Premature extraction with one consumer is real cost. Wait for the *second* consumer.
+
+**When:** trigger this refactor when starting work on either:
+- The Webex bot path (Phase 1.5 stretch / P1.5.4) — second consumer arrives
+- Cloud MCP server (Phase 2.1) — natural deployment target for the API itself
+
+### R3 — End-session signal from the piano (no more Ctrl+C wrestling)
+
+Today, ending a session relies on Ctrl+C through `op run`, which on Windows has flaky signal forwarding (the first Ctrl+C often gets swallowed by op CLI; user has to press it again). A cleaner approach: let the player end the session by pressing the lowest note on the keyboard — A0 (MIDI 21 in our note-naming convention, the leftmost key on a standard 88-key piano).
+
+**What:** in the MIDI callback in `practice_session.py`, treat MIDI 21 as a sentinel: process the final segment, run summary if applicable, disconnect cleanly. Also useful as a "manual segment break" signal — the player never has to take their hands off the keyboard to control the script.
+
+**Why:** removes the op-run/Ctrl+C bumpy moment from the demo recording; cleaner ergonomics live; clean test coverage of the post-session path.
+
+**Caveat:** if the player legitimately uses A0 in a piece, this would prematurely end the session. For scale practice (current scope) it's safe — no scale fingering uses MIDI 21. Document the behavior; could be made configurable later.
+
+**When:** before the demo recording session.
+
+---
+
 ## Open Issues
 
 | Issue | Status |
 |-------|--------|
 | Cloud Splunk instance | Decision pending — required for longitudinal coaching and Phase 2 |
-| `get_finger_trends` SPL fix | Deferred — fix before demo recording |
-| ngrok tier (Phase 1.5 only) | Paid required for fixed subdomain |
+| `get_finger_trends` SPL fix | ✅ Fixed April 25 (IOI-based deviation) |
+| ngrok tier (Phase 1.5 stretch only) | Paid required for fixed subdomain |

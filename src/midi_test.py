@@ -10,15 +10,20 @@ def note_number_to_name(note_number):
 def midi_callback(message, data=None):
     msg, delta_time = message
     status = msg[0]
-    
-    if status == 144 and msg[2] > 0:  # Note On
+    kind = status & 0xF0
+    ch   = (status & 0x0F) + 1
+
+    if kind == 0x90 and len(msg) > 2:
+        is_on = msg[2] > 0
+        note  = note_number_to_name(msg[1])
+        label = "NOTE ON " if is_on else "NOTE OFF"
+        marker = "  *** A0 STOP KEY ***" if msg[1] == 21 and is_on else ""
+        print(f"{label} | ch={ch} | {note:<4} (MIDI {msg[1]:3d}) | vel={msg[2]:3d}{marker}")
+    elif kind == 0x80 and len(msg) > 1:
         note = note_number_to_name(msg[1])
-        velocity = msg[2]
-        print(f"NOTE ON  | {note:<4} | velocity: {velocity}")
-    
-    elif status == 128 or (status == 144 and msg[2] == 0):  # Note Off
-        note = note_number_to_name(msg[1])
-        print(f"NOTE OFF | {note:<4}")
+        print(f"NOTE OFF | ch={ch} | {note:<4} (MIDI {msg[1]:3d})")
+    else:
+        print(f"RAW      | {[hex(b) for b in msg]}")
 
 def main():
     midi_in = rtmidi.MidiIn()
