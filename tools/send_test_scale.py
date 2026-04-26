@@ -100,20 +100,26 @@ def _open_reaper_port(port_name):
     return None
 
 
-def _play_notes(notes, hand, scale, session_id, pub, midi_out):
-    """Publish and optionally replay a list of notes with real timing."""
-    NOTE_DURATION_S = 0.08  # note held 80ms; fired async so IOI timing is unaffected
+def _play_all_notes(rh_notes, lh_notes, scale, session_id, pub, midi_out):
+    """Merge RH and LH by recording timestamp and replay in chronological order."""
+    NOTE_DURATION_S = 0.18  # note held 180ms for legato feel; fired async so IOI timing is unaffected
 
-    prev_time_ms = notes[0]["time_ms"] if notes else 0.0
-    for i, note in enumerate(notes):
-        if i > 0:
-            gap = (note["time_ms"] - prev_time_ms) / 1000.0
-            if gap > 0:
-                time.sleep(gap)
+    combined = sorted(
+        [(n, "right") for n in rh_notes] + [(n, "left") for n in lh_notes],
+        key=lambda x: x[0]["time_ms"],
+    )
+    if not combined:
+        return
+
+    prev_time_ms = combined[0][0]["time_ms"]
+    for note, hand in combined:
+        gap = (note["time_ms"] - prev_time_ms) / 1000.0
+        if gap > 0:
+            time.sleep(gap)
         prev_time_ms = note["time_ms"]
 
         pub.publish_note(note, hand, scale, session_id)
-        emit("note_played", note=note["name"], hand=hand)
+        emit("note_played", note=note["name"], hand=hand, finger=note.get("finger"))
         print(f"  {'RH' if hand == 'right' else 'LH'} {note['name']:4s}  finger={note['finger']}  vel={note['velocity']}")
 
         if midi_out:
@@ -273,11 +279,14 @@ def main():
 
     emit("session_started", session_id=session_id)
 
-    print("Publishing RH notes...")
-    _play_notes(rh_notes, "right", "c_major", session_id, pub, midi_out)
+    if midi_out:
+        midi_out.send_message([0x90, 108, 80])   # C8 — session start key
+        time.sleep(0.15)
+        midi_out.send_message([0x80, 108, 0])
+        time.sleep(0.4)  # brief pause before first note
 
-    print("Publishing LH notes...")
-    _play_notes(lh_notes, "left", "c_major", session_id, pub, midi_out)
+    print("Publishing notes (RH+LH interleaved by recording time)...")
+    _play_all_notes(rh_notes, lh_notes, "c_major", session_id, pub, midi_out)
 
     print("\nPublishing segment summary...")
     doc = _build_segment_doc(rh_notes, lh_notes, session_id)
@@ -286,6 +295,11 @@ def main():
     print(f"  Segment sent — {doc['metrics']['right']['speed_bpm']} BPM")
 
     if midi_out:
+        time.sleep(0.4)  # brief pause after last note
+        midi_out.send_message([0x90, 21, 80])    # A0 — session end key
+        time.sleep(0.15)
+        midi_out.send_message([0x80, 21, 0])
+        time.sleep(0.2)
         midi_out.close_port()
         del midi_out
 

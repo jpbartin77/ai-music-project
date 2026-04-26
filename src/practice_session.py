@@ -413,8 +413,14 @@ def run_session(scales, max_minutes=5, summary=True):
         print("No MIDI devices found!")
         return
 
-    print(f"\nConnected: {ports[0]}")
-    midi_in.open_port(0)
+    port_index = 0
+    for i, name in enumerate(ports):
+        if "usb-midi" in name.lower() or "usb midi" in name.lower():
+            port_index = i
+            break
+
+    print(f"\nConnected: {ports[port_index]}")
+    midi_in.open_port(port_index)
 
     publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
     publisher = HECPublisher() if publisher_type == 'hec' else MQTTPublisher()

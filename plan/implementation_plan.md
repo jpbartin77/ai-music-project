@@ -72,9 +72,12 @@ Everything runs on the workstation. No tunnels. No cloud dependencies except Web
 
 #### P1.4 — Demo Rehearsal Path ✅
 - ✅ `record_test_scale.py` captures real playing to JSON fixture
-- ✅ `send_test_scale.py --reaper --midi-port "TestScale" --no-coach` replays through Reaper VST + dashboard
-- [ ] Verify notes play through Reaper VST end-to-end (TestScale port wired, not yet confirmed)
-- [ ] Run full rehearsal: dashboard + audio + simulated coaching
+- ✅ Reaper VST playback confirmed via loopMIDI TestScale port
+- ✅ Full rehearsal confirmed: dashboard + audio + real coaching + Webex card
+- ✅ USB-MIDI auto-detection in both `record_test_scale.py` and `practice_session.py`
+- ⚠️ Test fixture hand-splitting unreliable (pitch threshold fails for overlapping octaves)
+  → **Decision: set aside.** Use live piano for demo. Test script useful for
+  dashboard smoke tests (--no-coach) and HEC connectivity checks only.
 
 #### P1.2 — Cloud Splunk
 The longitudinal coaching story ("your ring finger has been consistently late for 3 weeks") requires persistent data. dCloud rotates weekly and wipes all history.
@@ -111,6 +114,89 @@ Once pipeline is stable, record 5–10 real practice sessions:
 
 > 📝 **Checkpoint — write a project state note after P1.1 end-to-end test passes.**
 > Include: what's working, current architecture diagram, key technical elements with brief explanations. Save to `notes/` as `YYYY-MM-DD_state_phase1-complete.md`.
+
+---
+
+## Immediate Next Steps (pre-presentation)
+
+### N1 — Coaching Skill (highest priority)
+
+Formalize the "Coaching Skill" node in the diagram as a real Python class so the
+presentation tells an honest story. The purple node currently represents coach_agent.py's
+*role* — make it a first-class object with explicit input/output schema.
+
+**Design:**
+```python
+class CoachingSkill:
+    description = "Analyzes practice session data and generates coaching feedback"
+    input_schema  = {"session_id": str, "scale": str}
+    output_schema = {"summary": str, "strengths": list, "focus_areas": list,
+                     "trend": str, "suggested_next_session": str, "milestone": str}
+    def invoke(self, session_id: str, scale: str) -> dict: ...
+```
+
+**Realistic use case to implement first:** `PracticeRecommendationSkill`
+- Inputs: last N session summaries (pulled via MCP)
+- Output: prioritized 3-item practice plan with reasoning
+- Why it's genuinely a skill (not a tool): requires reasoning across sessions —
+  "your ring finger has been lagging for 3 weeks AND you have a recital in 10 days,
+  so prioritize F major thumb-crossover" can't be a lookup table
+- Presentation value: makes the agent/skill/tool distinction concrete and tangible
+
+**Questions to resolve before building:**
+- Should `CoachingSkill` wrap the existing `run_coach_summary()` or replace it?
+  Recommendation: wrap first, replace later — keeps the working path intact.
+- Is `PracticeRecommendationSkill` a second Claude call (separate system prompt,
+  separate MCP queries) or a section within the existing coaching call?
+  Recommendation: separate call — cleaner demo boundary, different input/output shape.
+
+### N2 — Finger Latency Chart (ascending vs. descending)
+
+The current per-finger deviation bar chart averages over all notes regardless of
+direction. Different fingers are tricky on each hand depending on scale direction
+(e.g., the thumb-crossover on the way up vs. the 3→1 finger swap on the way down).
+
+**Changes needed in `src/charts.py`:**
+- Make the chart taller (currently too short to read clearly)
+- Split each finger's bar into two: ascending (notes where next pitch > current)
+  and descending (notes where next pitch < current)
+- Direction is derivable from the note sequence already stored in Splunk —
+  no schema changes needed, just a new SPL calculation or post-processing step
+- Color suggestion: ascending = teal, descending = purple; keeps green/yellow/red
+  deviation magnitude encoding
+
+**Question:** should ascending/descending be side-by-side bars per finger, or two
+separate sub-charts (one per direction)? Leaning toward side-by-side — easier to
+spot which direction is weaker for a given finger in one glance.
+
+### N3 — Content / Narrative Documentation
+
+After N1 and N2: create a detailed markdown document (with Mermaid diagrams and
+screenshots) that maps code and config to the logical flow diagram for presentation.
+Not every config knob — just the high-level "here's what each box actually is."
+
+This is user-authored. Claude's role: review for accuracy, suggest diagram structure,
+help write the agent/skill/tool/MCP explanations clearly.
+
+### N4 — ThousandEyes or Workflows Integration
+
+**ThousandEyes (more likely path):**
+- TE Agent already installed on workstation
+- TE MCP server already configured in Claude Desktop and working
+- Idea: add TE agent tests targeting the components in this pipeline
+  (Splunk HEC endpoint, Webex API, Claude API) to track health/performance
+  in parallel to the app data
+- Could coach_agent.py use the TE MCP alongside the Splunk MCP? Yes — Claude
+  can call tools from both MCP servers in the same agentic loop
+- Presentation story: "same agent pattern, now applied to infrastructure monitoring"
+- **Question:** is the TE MCP server read-only (query existing test results) or
+  can it also create and configure tests? This determines whether we can set up
+  new monitors programmatically or just query existing ones.
+
+**Workflows (stretch):**
+- Fan-out: finished coaching report → Workflows webhook → Webex card + Google Drive
+- Useful for demo if the goal is specifically to show Workflows in the loop
+- Defer until TE path is evaluated — don't need both for one presentation
 
 ---
 
@@ -277,6 +363,35 @@ flowchart TD
 
 ## Refactor Backlog
 *Things worth doing eventually, not blocking anything today. Listed with their natural trigger.*
+
+### R0 — MIDI Loopback / Recorded Playback (set aside — not needed for presentation)
+
+The `send_test_scale.py --reaper` path works for dashboard + audio rehearsal, but the
+test fixture hand-splitting is unreliable (pitch threshold fails for overlapping octaves).
+Not worth fixing before the presentation — use the live piano instead.
+
+**Future direction worth exploring (connects to the improv partner vision):**
+
+Instead of the current approach (capture raw note-on events → replay via loopMIDI),
+consider using Reaper as the capture layer:
+
+1. Piano → Reaper records full MIDI (note-on/off, sustain pedal, velocity curves,
+   articulation) — much richer than the current note-on-only capture
+2. reapy pushes the recorded performance to coach_agent.py at session end
+3. Coach receives full expressive MIDI detail but only extracts what it needs
+   (timing, velocity) — doesn't have to parse raw MIDI itself
+
+Why this is interesting:
+- Sustain, articulation, and dynamic shape are real musical data — a coaching
+  AI that ignores them misses half the story
+- Reaper handles the hard MIDI recording problem (buffer timing, port management,
+  multi-channel) so Python doesn't have to
+- Creates a natural path toward the improv partner vision: Reaper as the
+  real-time MIDI environment, reapy as the bridge, Claude as the responsive agent
+
+**When to revisit:** after the presentation, when shifting toward Phase 2 / local LLM work.
+The improv partner idea (local LLM + generative MIDI response) is the original project
+vision and a natural evolution once the coaching loop is proven.
 
 ### R1 — Behavioral toggles: env vars → CLI flags
 

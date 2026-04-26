@@ -42,8 +42,19 @@ def main():
         print("No MIDI devices found — connect the piano and try again.")
         sys.exit(1)
 
-    print(f"Connected: {ports[0]}")
-    midi_in.open_port(0)
+    print("Available MIDI input ports:")
+    for i, name in enumerate(ports):
+        print(f"  [{i}] {name}")
+
+    # Prefer USB-MIDI (the piano); fall back to port 0
+    port_index = 0
+    for i, name in enumerate(ports):
+        if "usb-midi" in name.lower() or "usb midi" in name.lower():
+            port_index = i
+            break
+
+    print(f"\nUsing: [{port_index}] {ports[port_index]}")
+    midi_in.open_port(port_index)
 
     print()
     print("  Play 2 full C-Major scales (RH + LH together, ascending and descending).")
