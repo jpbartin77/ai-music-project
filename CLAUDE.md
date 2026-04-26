@@ -32,7 +32,7 @@ No tunnels. No Workflows in the session trigger path. Everything runs on the wor
 
 | File | Purpose |
 |------|---------|
-| `src/practice_session.py` | MIDI capture, hand splitting, scale detection, scoring, session-end coach trigger |
+| `src/practice_session.py` | MIDI capture, hand splitting, scale detection, scoring, session-end coach trigger. Starts in listening mode; C8 (MIDI 108) starts a session, A0 (MIDI 21) ends it. |
 | `src/hec_publisher.py` | Posts events directly to Splunk HEC (bypasses Node-RED) |
 | `src/mqtt_publisher.py` | Legacy MQTT publisher (fallback; set `PUBLISHER_TYPE=mqtt`) |
 | `src/mcp_server.py` | MCP server — 5 tools exposing Splunk practice data to Claude |
@@ -40,7 +40,9 @@ No tunnels. No Workflows in the session trigger path. Everything runs on the wor
 | `src/webex_delivery.py` | Posts coaching report as Webex Adaptive Card v1.2 |
 | `src/cloud_run_app.py` | PARKED — Flask `/coach` endpoint (Cloud Run target, not in use) |
 | `src/piano_roll.py` | Record MIDI → save .mid → render piano roll PNG |
-| `src/midi_test.py` | Debug listener — prints NOTE_ON/OFF events |
+| `src/midi_test.py` | Debug listener — prints NOTE_ON/OFF events with A0 marker |
+| `src/demo_server.py` | Flask SSE server — animated pipeline dashboard at localhost:5000 |
+| `src/demo_emitter.py` | Fire-and-forget HTTP emitter; called by practice_session.py to push events to demo_server |
 | `tools/send_test_scale.py` | Simulates a C major scale via HEC/MQTT (no piano needed) |
 | `tools/test_mcp_tools.py` | Smoke-tests MCP server Splunk connectivity |
 
@@ -50,10 +52,18 @@ No tunnels. No Workflows in the session trigger path. Everything runs on the wor
 
 All secrets are injected at runtime via 1Password CLI. Nothing sensitive is ever on disk.
 
-```bash
-op run --env-file=.env.tpl -- python src/practice_session.py
-op run --env-file=.env.tpl -- python src/coach_agent.py
-op run --env-file=.env.tpl -- python tools/send_test_scale.py
+**Always use `.venv\Scripts\python.exe` explicitly with `op run`** — `op run` spawns a subprocess that may not resolve `python` to the venv even when the venv is activated in the shell.
+
+```powershell
+op run --env-file=.env.tpl -- .venv\Scripts\python.exe src/practice_session.py
+op run --env-file=.env.tpl -- .venv\Scripts\python.exe src/coach_agent.py
+op run --env-file=.env.tpl -- .venv\Scripts\python.exe tools/send_test_scale.py
+```
+
+Scripts with no secrets (e.g. `demo_server.py`) can be run directly without `op run`:
+
+```powershell
+python src/demo_server.py
 ```
 
 ### Environment Variables
@@ -70,6 +80,7 @@ op run --env-file=.env.tpl -- python tools/send_test_scale.py
 | `ANTHROPIC_API_KEY` | Claude API key | — |
 | `WEBEX_BOT_TOKEN` | Webex bot token | — |
 | `WEBEX_ROOM_ID` | Webex space to post cards to | — |
+| `DEMO_SERVER_URL` | `http://localhost:5000` to enable dashboard; blank = disabled | — |
 
 **Current dCloud addresses (ephemeral — rotate weekly):**
 - `SPLUNK_HEC_URL=http://198.18.135.50:8088/services/collector/event`
@@ -91,7 +102,7 @@ op run --env-file=.env.tpl -- python tools/send_test_scale.py
 ## Dev Conventions
 
 - `.env.tpl` uses 1Password secret references (`op://Private/...`). Never put real values in it.
-- Run everything via `op run --env-file=.env.tpl -- python src/<script>.py`
+- Run secrets-needing scripts via `op run --env-file=.env.tpl -- .venv\Scripts\python.exe src/<script>.py`
 - `tools/` contains test utilities that don't require a piano
 - `config/fingerings.md` defines 12 major scales with finger mappings — parsed by `practice_session.py`
 - Python 3.13 + `reapy-next` requires manual patches; see `notes/Reapy_Patch_Notes.md` and `patch_reapy.bat`

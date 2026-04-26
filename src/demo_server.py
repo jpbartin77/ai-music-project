@@ -78,6 +78,17 @@ HTML = """<!DOCTYPE html>
     height: auto;
   }
 
+  /* Skill node — purple accent distinguishes AI-layer from infrastructure nodes */
+  #node-skill rect { stroke: #7c3aed; fill: #1a0a38; }
+  #node-skill text { fill: #c4b5fd; }
+  #node-skill .sub  { fill: #7c5cbf; }
+  #node-skill.active rect { fill: #2e1065; stroke: #a855f7; stroke-width: 2; filter: drop-shadow(0 0 8px #a855f780); }
+  #node-skill.active text { fill: #e9d5ff; }
+  #node-skill.done rect   { fill: #052e16; stroke: #22c55e; stroke-width: 1.8; filter: drop-shadow(0 0 6px #22c55e60); }
+  #node-skill.done text   { fill: #bbf7d0; }
+
+  .status-pill.done { background: #065f46; color: #6ee7b7; border-color: #059669; }
+
   /* Node base */
   .node rect, .node .cyl-body, .node ellipse {
     fill: #0f2744;
@@ -205,7 +216,7 @@ HTML = """<!DOCTYPE html>
 
   <!-- Pipeline SVG -->
   <div class="diagram-wrap">
-  <svg id="pipeline" viewBox="0 0 860 500" xmlns="http://www.w3.org/2000/svg">
+  <svg id="pipeline" viewBox="0 0 1020 590" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
         <path d="M0,0 L0,6 L8,3 z" fill="#2d5a8e"/>
@@ -220,111 +231,119 @@ HTML = """<!DOCTYPE html>
 
     <!-- ── Arrows (behind nodes) ── -->
     <!-- Piano → practice_session -->
-    <path id="arr-piano-session" class="arrow" d="M170,120 L170,200"/>
+    <path id="arr-piano-session" class="arrow" d="M140,100 L140,162"/>
     <!-- practice_session → Splunk -->
-    <path id="arr-session-splunk" class="arrow" d="M170,280 L170,370"/>
+    <path id="arr-session-splunk" class="arrow" d="M140,242 L140,422"/>
     <!-- practice_session → Coach -->
-    <path id="arr-session-coach" class="arrow" d="M270,240 L480,240"/>
-    <!-- Coach → mcp_server -->
-    <path id="arr-coach-mcp" class="arrow" d="M530,300 L400,370"/>
+    <path id="arr-session-coach" class="arrow" d="M220,202 L430,202"/>
+    <!-- Coach → Coaching Skill -->
+    <path id="arr-coach-skill" class="arrow" d="M525,242 L505,302"/>
+    <!-- Coaching Skill → mcp_server -->
+    <path id="arr-skill-mcp" class="arrow" d="M450,357 L355,418"/>
     <!-- mcp_server → Splunk -->
-    <path id="arr-mcp-splunk" class="arrow" d="M340,390 L230,400"/>
-    <!-- Coach → charts -->
-    <path id="arr-coach-charts" class="arrow" d="M580,300 L580,370"/>
+    <path id="arr-mcp-splunk" class="arrow" d="M278,448 L220,462"/>
+    <!-- Coaching Skill → charts -->
+    <path id="arr-skill-charts" class="arrow" d="M560,357 L628,418"/>
     <!-- Coach → webex_delivery -->
-    <path id="arr-coach-webex" class="arrow" d="M630,260 L700,260"/>
-    <!-- charts → webex_delivery -->
-    <path id="arr-charts-webex" class="arrow" d="M620,400 L695,310"/>
+    <path id="arr-coach-webex" class="arrow" d="M625,202 L775,202"/>
     <!-- webex_delivery → Webex Space -->
-    <path id="arr-webex-space" class="arrow" d="M760,260 L760,370"/>
-    <!-- Splunk → Webex Space (feedback) -->
-    <path id="arr-splunk-space" class="arrow" d="M230,430 L720,430"/>
+    <path id="arr-webex-space" class="arrow" d="M858,242 L858,422"/>
 
     <!-- ── Nodes ── -->
 
     <!-- Piano -->
-    <g id="node-piano" class="node" transform="translate(80,60)">
-      <rect width="180" height="60" rx="10"/>
-      <text x="90" y="22" text-anchor="middle" class="icon">🎹</text>
-      <text x="90" y="40" text-anchor="middle" font-weight="600">Piano (USB MIDI)</text>
-      <text x="90" y="54" text-anchor="middle" class="sub">88-key keyboard</text>
-      <text x="162" y="18" class="check" font-size="14">✅</text>
+    <g id="node-piano" class="node" transform="translate(40,40)">
+      <rect width="200" height="60" rx="10"/>
+      <text x="100" y="22" text-anchor="middle" class="icon">🎹</text>
+      <text x="100" y="40" text-anchor="middle" font-weight="600">Piano (USB MIDI)</text>
+      <text x="100" y="54" text-anchor="middle" class="sub">88-key keyboard</text>
+      <text x="180" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- practice_session -->
-    <g id="node-session" class="node" transform="translate(80,200)">
-      <rect width="180" height="80" rx="10"/>
-      <text x="90" y="22" text-anchor="middle" class="icon">🖥️</text>
-      <text x="90" y="42" text-anchor="middle" font-weight="600">practice_session.py</text>
-      <text x="90" y="57" text-anchor="middle" class="sub">MIDI capture</text>
-      <text x="90" y="70" text-anchor="middle" class="sub">+ scoring</text>
-      <text x="162" y="18" class="check" font-size="14">✅</text>
+    <g id="node-session" class="node" transform="translate(40,162)">
+      <rect width="200" height="80" rx="10"/>
+      <text x="100" y="22" text-anchor="middle" class="icon">🖥️</text>
+      <text x="100" y="42" text-anchor="middle" font-weight="600">practice_session.py</text>
+      <text x="100" y="57" text-anchor="middle" class="sub">MIDI capture</text>
+      <text x="100" y="70" text-anchor="middle" class="sub">+ scoring</text>
+      <text x="180" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- Splunk -->
-    <g id="node-splunk" class="node" transform="translate(80,370)">
-      <ellipse cx="90" cy="14" rx="90" ry="14"/>
-      <rect class="cyl-body" x="0" y="12" width="180" height="70" rx="0"/>
-      <ellipse cx="90" cy="82" rx="90" ry="14"/>
-      <text x="90" y="52" text-anchor="middle" font-weight="600">Splunk</text>
-      <text x="90" y="67" text-anchor="middle" class="sub">index=edge_hub_mqtt</text>
-      <text x="162" y="30" class="check" font-size="14">✅</text>
+    <g id="node-splunk" class="node" transform="translate(40,422)">
+      <ellipse cx="100" cy="14" rx="100" ry="14"/>
+      <rect class="cyl-body" x="0" y="12" width="200" height="72" rx="0"/>
+      <ellipse cx="100" cy="84" rx="100" ry="14"/>
+      <text x="100" y="54" text-anchor="middle" font-weight="600">Splunk</text>
+      <text x="100" y="69" text-anchor="middle" class="sub">index=edge_hub_mqtt</text>
+      <text x="178" y="30" class="check" font-size="14">✅</text>
     </g>
 
     <!-- Coach Agent -->
-    <g id="node-coach" class="node" transform="translate(470,200)">
-      <rect width="180" height="80" rx="10"/>
-      <text x="90" y="22" text-anchor="middle" class="icon">🤖</text>
-      <text x="90" y="42" text-anchor="middle" font-weight="600">Coach Agent</text>
-      <text x="90" y="57" text-anchor="middle" class="sub">claude-opus-4-7</text>
-      <text x="90" y="70" text-anchor="middle" class="sub">MCP tool calls</text>
-      <text x="162" y="18" class="check" font-size="14">✅</text>
+    <g id="node-coach" class="node" transform="translate(430,162)">
+      <rect width="200" height="80" rx="10"/>
+      <text x="100" y="22" text-anchor="middle" class="icon">🤖</text>
+      <text x="100" y="42" text-anchor="middle" font-weight="600">Coach Agent</text>
+      <text x="100" y="57" text-anchor="middle" class="sub">claude-opus-4-7</text>
+      <text x="100" y="70" text-anchor="middle" class="sub">AI orchestrator</text>
+      <text x="180" y="18" class="check" font-size="14">✅</text>
+    </g>
+
+    <!-- Coaching Skill (AI layer) -->
+    <g id="node-skill" class="node" transform="translate(410,302)">
+      <rect width="200" height="55" rx="8"/>
+      <text x="100" y="20" text-anchor="middle" class="icon">💡</text>
+      <text x="100" y="38" text-anchor="middle" font-weight="600">Coaching Skill</text>
+      <text x="100" y="51" text-anchor="middle" class="sub">analyze · chart · report</text>
+      <text x="180" y="16" class="check" font-size="14">✅</text>
     </g>
 
     <!-- mcp_server -->
-    <g id="node-mcp" class="node" transform="translate(330,355)">
-      <rect width="160" height="60" rx="10"/>
-      <text x="80" y="22" text-anchor="middle" class="icon">🗄️</text>
-      <text x="80" y="40" text-anchor="middle" font-weight="600">mcp_server.py</text>
-      <text x="80" y="54" text-anchor="middle" class="sub">SPL → Splunk REST</text>
-      <text x="142" y="18" class="check" font-size="14">✅</text>
+    <g id="node-mcp" class="node" transform="translate(268,418)">
+      <rect width="185" height="60" rx="10"/>
+      <text x="92" y="22" text-anchor="middle" class="icon">🗄️</text>
+      <text x="92" y="40" text-anchor="middle" font-weight="600">mcp_server.py</text>
+      <text x="92" y="54" text-anchor="middle" class="sub">SPL → Splunk REST</text>
+      <text x="165" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- charts -->
-    <g id="node-charts" class="node" transform="translate(530,370)">
-      <rect width="140" height="60" rx="10"/>
-      <text x="70" y="22" text-anchor="middle" class="icon">📊</text>
-      <text x="70" y="40" text-anchor="middle" font-weight="600">charts.py</text>
-      <text x="70" y="54" text-anchor="middle" class="sub">PNG panel</text>
-      <text x="122" y="18" class="check" font-size="14">✅</text>
+    <g id="node-charts" class="node" transform="translate(580,418)">
+      <rect width="165" height="60" rx="10"/>
+      <text x="82" y="22" text-anchor="middle" class="icon">📊</text>
+      <text x="82" y="40" text-anchor="middle" font-weight="600">charts.py</text>
+      <text x="82" y="54" text-anchor="middle" class="sub">PNG panel</text>
+      <text x="145" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- webex_delivery -->
-    <g id="node-webex-delivery" class="node" transform="translate(690,210)">
-      <rect width="150" height="80" rx="10"/>
-      <text x="75" y="22" text-anchor="middle" class="icon">🚚</text>
-      <text x="75" y="42" text-anchor="middle" font-weight="600">webex_delivery</text>
-      <text x="75" y="57" text-anchor="middle" class="sub">Adaptive Card</text>
-      <text x="75" y="70" text-anchor="middle" class="sub">+ chart PNG</text>
-      <text x="132" y="18" class="check" font-size="14">✅</text>
+    <g id="node-webex-delivery" class="node" transform="translate(775,162)">
+      <rect width="200" height="80" rx="10"/>
+      <text x="100" y="22" text-anchor="middle" class="icon">🚚</text>
+      <text x="100" y="42" text-anchor="middle" font-weight="600">webex_delivery</text>
+      <text x="100" y="57" text-anchor="middle" class="sub">Adaptive Card</text>
+      <text x="100" y="70" text-anchor="middle" class="sub">+ chart PNG</text>
+      <text x="180" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- Webex Space -->
-    <g id="node-webex-space" class="node" transform="translate(680,370)">
-      <rect width="160" height="70" rx="10"/>
-      <text x="80" y="24" text-anchor="middle" class="icon">💬</text>
-      <text x="80" y="44" text-anchor="middle" font-weight="600">Webex Space</text>
-      <text x="80" y="58" text-anchor="middle" class="sub">Coaching card</text>
-      <text x="142" y="18" class="check" font-size="14">✅</text>
+    <g id="node-webex-space" class="node" transform="translate(775,422)">
+      <rect width="200" height="70" rx="10"/>
+      <text x="100" y="24" text-anchor="middle" class="icon">💬</text>
+      <text x="100" y="44" text-anchor="middle" font-weight="600">Webex Space</text>
+      <text x="100" y="58" text-anchor="middle" class="sub">Coaching card</text>
+      <text x="180" y="18" class="check" font-size="14">✅</text>
     </g>
 
     <!-- Arrow labels -->
-    <text x="183" y="162" font-size="9" fill="#4a6a8a">MIDI events</text>
-    <text x="183" y="330" font-size="9" fill="#4a6a8a">HEC POST</text>
-    <text x="340" y="232" font-size="9" fill="#4a6a8a">session end</text>
-    <text x="440" y="352" font-size="9" fill="#4a6a8a">MCP tool calls</text>
-    <text x="680" y="232" font-size="9" fill="#4a6a8a">coaching JSON</text>
-    <text x="690" y="348" font-size="9" fill="#4a6a8a">Adaptive Card</text>
+    <text x="248" y="133" font-size="9" fill="#4a6a8a">MIDI events</text>
+    <text x="248" y="352" font-size="9" fill="#4a6a8a">HEC POST</text>
+    <text x="316" y="195" font-size="9" fill="#4a6a8a">session end</text>
+    <text x="536" y="293" font-size="9" fill="#7c3aed">skill invoke</text>
+    <text x="348" y="388" font-size="9" fill="#4a6a8a">tool calls</text>
+    <text x="688" y="195" font-size="9" fill="#4a6a8a">coaching JSON</text>
+    <text x="787" y="390" font-size="9" fill="#4a6a8a">Adaptive Card</text>
   </svg>
   </div>
 
@@ -355,17 +374,17 @@ const ARROW_IDS = {
   'note_played':       ['arr-piano-session', 'arr-session-splunk'],
   'segment_complete':  ['arr-session-coach'],
   'session_ended':     ['arr-session-coach'],
-  'coach_started':     ['arr-coach-mcp', 'arr-mcp-splunk'],
-  'mcp_query':         ['arr-coach-mcp', 'arr-mcp-splunk'],
-  'chart_generated':   ['arr-coach-charts', 'arr-charts-webex'],
-  'webex_sent':        ['arr-coach-webex', 'arr-webex-space', 'arr-splunk-space'],
+  'coach_started':     ['arr-coach-skill'],
+  'mcp_query':         ['arr-skill-mcp', 'arr-mcp-splunk'],
+  'chart_generated':   ['arr-skill-charts'],
+  'webex_sent':        ['arr-coach-webex', 'arr-webex-space'],
 };
 
 const NODE_ACTIVATE = {
-  'note_played':       ['node-piano', 'node-session'],
+  'note_played':       ['node-piano', 'node-session', 'node-splunk'],
   'segment_complete':  ['node-session'],
   'session_ended':     ['node-session', 'node-coach'],
-  'coach_started':     ['node-coach', 'node-mcp'],
+  'coach_started':     ['node-coach', 'node-skill'],
   'mcp_query':         ['node-mcp', 'node-splunk'],
   'chart_generated':   ['node-charts'],
   'webex_sent':        ['node-webex-delivery', 'node-webex-space'],
@@ -373,7 +392,7 @@ const NODE_ACTIVATE = {
 
 const NODE_DONE = {
   'segment_complete':  ['node-session'],
-  'webex_sent':        ['node-coach', 'node-mcp', 'node-charts', 'node-webex-delivery', 'node-webex-space'],
+  // webex_sent done-state is applied with a delay (see handleEvent)
 };
 
 const STAGE_ACTIVATE = {
@@ -387,7 +406,7 @@ const STAGE_ACTIVATE = {
 
 const STAGE_DONE = {
   'segment_complete':  'stage-splunk',
-  'webex_sent':        ['stage-coach', 'stage-mcp', 'stage-charts', 'stage-webex'],
+  // webex_sent stages are marked done inside the setTimeout in handleEvent
 };
 
 function activateNodes(ids) {
@@ -446,10 +465,41 @@ function handleEvent(data) {
     ids.forEach(id => setStage(id, 'done'));
   }
 
-  // Status pill
-  if (ev === 'session_started')  { pill.textContent = 'Session active'; pill.className = 'status-pill active'; setStage('stage-capture','active'); activateNodes(['node-piano','node-session']); }
-  if (ev === 'session_ended')    { pill.textContent = 'Analyzing…'; pill.className = 'status-pill analyzing'; setStage('stage-capture','done'); }
-  if (ev === 'webex_sent')       { pill.textContent = 'Complete ✅'; pill.className = 'status-pill done'; }
+  // Status pill + special state transitions
+  if (ev === 'listening') {
+    // Reset everything to idle between sessions
+    ['node-piano','node-session','node-splunk','node-coach','node-mcp',
+     'node-skill','node-charts','node-webex-delivery','node-webex-space']
+      .forEach(id => { const el = document.getElementById(id); if (el) { el.classList.remove('active','done'); } });
+    ['arr-piano-session','arr-session-splunk','arr-session-coach','arr-coach-skill',
+     'arr-skill-mcp','arr-mcp-splunk','arr-skill-charts','arr-coach-webex','arr-webex-space']
+      .forEach(id => { const el = document.getElementById(id); if (el) { el.classList.remove('active','done'); } });
+    ['stage-capture','stage-splunk','stage-coach','stage-mcp','stage-charts','stage-webex']
+      .forEach(id => setStage(id, null));
+    logLines = []; document.getElementById('note-log').innerHTML = '<span class="sys">Waiting for session...</span>';
+    pill.textContent = 'Waiting for session'; pill.className = 'status-pill';
+  }
+  if (ev === 'session_started') {
+    pill.textContent = 'Session active'; pill.className = 'status-pill active';
+    setStage('stage-capture', 'active'); activateNodes(['node-piano', 'node-session']);
+  }
+  if (ev === 'session_ended') {
+    pill.textContent = 'Analyzing…'; pill.className = 'status-pill analyzing';
+    setStage('stage-capture', 'done');
+    // Splunk dims briefly — it fed the session, now coach takes over
+    const splunkEl = document.getElementById('node-splunk');
+    if (splunkEl) splunkEl.classList.remove('active');
+  }
+  if (ev === 'webex_sent') {
+    // Show active glow on webex nodes first, then go green after a beat
+    setTimeout(() => {
+      doneNodes(['node-coach', 'node-mcp', 'node-skill', 'node-charts',
+                 'node-webex-delivery', 'node-webex-space', 'node-splunk',
+                 'node-piano', 'node-session']);
+      ['stage-coach', 'stage-mcp', 'stage-charts', 'stage-webex'].forEach(id => setStage(id, 'done'));
+      pill.textContent = 'Complete ✅'; pill.className = 'status-pill done';
+    }, 1500);
+  }
 
   // Note log
   if (ev === 'note_played') {

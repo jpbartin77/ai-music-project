@@ -401,6 +401,7 @@ def _run_session_summary(session_id, scales_played):
                 print("  [summary] WEBEX_ROOM_ID not set -- skipping card delivery.")
         except Exception as e:
             print(f"  [summary] Error coaching {scale}: {e}")
+    time.sleep(2)  # let demo-emitter daemon threads finish HTTP POSTs before exit
 
 
 # ── Session ───────────────────────────────────────────────────────────────────
@@ -413,180 +414,213 @@ def run_session(scales, max_minutes=5, summary=True):
         return
 
     print(f"\nConnected: {ports[0]}")
-    print(f"Play any major scale with both hands.")
-    print(f"2-second pause ends each run. Press A0 (lowest key) or Ctrl+C to finish.\n")
-
     midi_in.open_port(0)
-    start_time = time.perf_counter()
-    session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-    _emit('session_started', session_id=session_id)
 
     publisher_type = os.environ.get('PUBLISHER_TYPE', 'hec').lower()
     publisher = HECPublisher() if publisher_type == 'hec' else MQTTPublisher()
-    stop_event = threading.Event()
 
-    summary_mode = summary
-    if summary_mode:
-        print("  [mode] summary mode -- one card per scale at session end (no per-segment cards)")
-
-    # ── Non-blocking publish queue ────────────────────────────────────────────
-    # All HEC POSTs run in a background thread so the MIDI callback never stalls
-    # waiting on network. The queue drainer flushes before the session exits.
-    _pub_q = queue.Queue()
-
-    def _publish_worker():
-        while True:
-            item = _pub_q.get()
-            if item is None:        # poison pill — drain complete
-                _pub_q.task_done()
-                break
-            kind, args = item
-            if kind == 'note':
-                publisher.publish_note(*args)
-            elif kind == 'segment':
-                publisher.publish_segment(*args)
-            _pub_q.task_done()
-
-    _pub_thread = threading.Thread(target=_publish_worker, daemon=True, name='hec-publisher')
-    _pub_thread.start()
-
-    lock = threading.Lock()
-    state = {
-        'segment': Segment(scales),
-        'splitter': HandSplitter(),
-        'gap_timer': None,
-        'seg_count': 0,
-        'scales_played': [],   # ordered list of distinct scale names played
-    }
-
-    def process_and_reset():
-        seg_snapshot = None
-        seg_index = None
-        discard_msg = None
-
-        with lock:
-            seg = state['segment']
-            if seg.is_useful():
-                state['seg_count'] += 1
-                seg_snapshot = seg
-                seg_index = state['seg_count']
-                if seg.scale_name and seg.scale_name not in state['scales_played']:
-                    state['scales_played'].append(seg.scale_name)
-            else:
-                ln = len(seg.lh_events)
-                rn = len(seg.rh_events)
-                if ln > 0 or rn > 0:
-                    if ln == 0 or rn == 0:
-                        discard_msg = f"  [single hand only (LH:{ln} RH:{rn}) -- discarded]"
-                    else:
-                        discard_msg = f"  [too short or no scale (LH:{ln} RH:{rn}) -- discarded]"
-            state['segment'] = Segment(scales)
-
-        # All I/O outside the lock: print, disk write, queue — none of these block MIDI
-        if discard_msg:
-            print(discard_msg)
-        if seg_snapshot is not None:
-            print_segment_results(seg_snapshot, scales)
-            doc = save_segment(seg_snapshot, scales, seg_index, session_id)
-            _pub_q.put(('segment', (doc, session_id)))
-            rh_bpm = doc.get('metrics', {}).get('right', {}) or {}
-            _emit('segment_complete',
-                  index=seg_index, scale=seg_snapshot.scale_name,
-                  rh_bpm=round(rh_bpm.get('speed_bpm', 0), 1))
-            if not summary_mode:
-                _maybe_run_coach(session_id)
-
-    def on_gap():
-        process_and_reset()
-
-    def reset_gap_timer():
-        if state['gap_timer']:
-            state['gap_timer'].cancel()
-        t = threading.Timer(GAP_SECONDS, on_gap)
-        t.daemon = True
-        t.start()
-        state['gap_timer'] = t
-
-    def callback(message, _=None):
-        msg, _ = message
-        if msg[0] & 0xF0 != 0x90:   # NOTE_ON on any channel
-            return
-
-        midi = msg[1]
-
-        if midi == 21:  # A0 — stop session (check before velocity filter)
-            print("\n  [A0 pressed — ending session...]")
-            _emit('session_ended', segments=state['seg_count'])
-            stop_event.set()
-            return
-
-        if msg[2] == 0:             # velocity=0 is a note-off
-            return
-
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
-        note_lines = []
-        note_publishes = []
-        with lock:
-            assignments = state['splitter'].assign(midi, elapsed_ms)
-            for note_midi, hand, note_time in assignments:
-                event = {
-                    'time_ms': note_time,
-                    'midi': note_midi,
-                    'name': note_name(note_midi),
-                    'velocity': msg[2],
-                }
-                state['segment'].add(event, hand)
-                finger = event.get('finger')
-                flabel = FINGER_NAMES.get(finger, '?') if finger else '?'
-                note_lines.append(
-                    f"  ♪ {note_name(note_midi):<4} {hand[0].upper()}H  "
-                    f"finger:{flabel:<8}  t:{note_time:8.0f}ms"
-                )
-                note_publishes.append(
-                    (dict(event), hand, state['segment'].scale_name or 'unknown')
-                )
-
-        # All I/O outside the lock: terminal writes and queue puts are non-blocking
-        for line in note_lines:
-            print(line)
-        for (ev_dict, hand, scale_name), line in zip(note_publishes, note_lines):
-            _pub_q.put(('note', (ev_dict, hand, scale_name, session_id)))
-            _emit('note_played', note=ev_dict['name'], hand=hand,
-                  finger=ev_dict.get('finger'), scale=scale_name)
-
-        reset_gap_timer()
-
-    midi_in.set_callback(callback)
-
-    deadline = start_time + max_minutes * 60
     try:
-        while not stop_event.is_set():
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                break
-            stop_event.wait(timeout=min(0.5, remaining))
+        while True:
+            # ── LISTENING PHASE ───────────────────────────────────────────────
+            # Wait for C8 (MIDI 108 — top key of 88-key piano) to start a session.
+            _emit('listening')
+            print(f"\n  Ready — press C8 (top key) to start a {max_minutes}-min session"
+                  f"  |  Ctrl+C to quit\n")
+
+            start_event = threading.Event()
+
+            def _start_cb(message, _=None):
+                msg, _ = message
+                if msg[0] & 0xF0 == 0x90 and msg[1] == 108 and msg[2] > 0:
+                    start_event.set()
+
+            midi_in.set_callback(_start_cb)
+
+            try:
+                while not start_event.is_set():
+                    start_event.wait(timeout=0.5)
+            except KeyboardInterrupt:
+                break   # exit the outer while True
+
+            # ── SESSION PHASE ─────────────────────────────────────────────────
+            print(f"\n  [C8] Starting {max_minutes}-minute session."
+                  f"  Play scales. Press A0 (lowest key) to end.\n")
+
+            start_time = time.perf_counter()
+            session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+            _emit('session_started', session_id=session_id)
+
+            summary_mode = summary
+            if summary_mode:
+                print("  [mode] summary mode -- one card per scale at session end (no per-segment cards)")
+
+            # All HEC POSTs run in a background thread so the MIDI callback never stalls.
+            _pub_q = queue.Queue()
+
+            def _publish_worker():
+                while True:
+                    item = _pub_q.get()
+                    if item is None:        # poison pill — drain complete
+                        _pub_q.task_done()
+                        break
+                    kind, args = item
+                    if kind == 'note':
+                        publisher.publish_note(*args)
+                    elif kind == 'segment':
+                        publisher.publish_segment(*args)
+                    _pub_q.task_done()
+
+            _pub_thread = threading.Thread(target=_publish_worker, daemon=True, name='hec-publisher')
+            _pub_thread.start()
+
+            lock = threading.Lock()
+            stop_event = threading.Event()
+            state = {
+                'segment': Segment(scales),
+                'splitter': HandSplitter(),
+                'gap_timer': None,
+                'seg_count': 0,
+                'scales_played': [],   # ordered list of distinct scale names played
+            }
+
+            def process_and_reset():
+                seg_snapshot = None
+                seg_index = None
+                discard_msg = None
+
+                with lock:
+                    seg = state['segment']
+                    if seg.is_useful():
+                        state['seg_count'] += 1
+                        seg_snapshot = seg
+                        seg_index = state['seg_count']
+                        if seg.scale_name and seg.scale_name not in state['scales_played']:
+                            state['scales_played'].append(seg.scale_name)
+                    else:
+                        ln = len(seg.lh_events)
+                        rn = len(seg.rh_events)
+                        if ln > 0 or rn > 0:
+                            if ln == 0 or rn == 0:
+                                discard_msg = f"  [single hand only (LH:{ln} RH:{rn}) -- discarded]"
+                            else:
+                                discard_msg = f"  [too short or no scale (LH:{ln} RH:{rn}) -- discarded]"
+                    state['segment'] = Segment(scales)
+
+                # All I/O outside the lock: print, disk write, queue — none of these block MIDI
+                if discard_msg:
+                    print(discard_msg)
+                if seg_snapshot is not None:
+                    print_segment_results(seg_snapshot, scales)
+                    doc = save_segment(seg_snapshot, scales, seg_index, session_id)
+                    _pub_q.put(('segment', (doc, session_id)))
+                    rh_bpm = doc.get('metrics', {}).get('right', {}) or {}
+                    _emit('segment_complete',
+                          index=seg_index, scale=seg_snapshot.scale_name,
+                          rh_bpm=round(rh_bpm.get('speed_bpm', 0), 1))
+                    if not summary_mode:
+                        _maybe_run_coach(session_id)
+
+            def on_gap():
+                process_and_reset()
+
+            def reset_gap_timer():
+                if state['gap_timer']:
+                    state['gap_timer'].cancel()
+                t = threading.Timer(GAP_SECONDS, on_gap)
+                t.daemon = True
+                t.start()
+                state['gap_timer'] = t
+
+            def callback(message, _=None):
+                msg, _ = message
+                if msg[0] & 0xF0 != 0x90:   # NOTE_ON on any channel
+                    return
+
+                midi = msg[1]
+
+                if midi == 21:  # A0 — stop session (check before velocity filter)
+                    print("\n  [A0 pressed — ending session...]")
+                    _emit('session_ended', segments=state['seg_count'])
+                    stop_event.set()
+                    return
+
+                if msg[2] == 0:             # velocity=0 is a note-off
+                    return
+
+                elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+                note_lines = []
+                note_publishes = []
+                with lock:
+                    assignments = state['splitter'].assign(midi, elapsed_ms)
+                    for note_midi, hand, note_time in assignments:
+                        event = {
+                            'time_ms': note_time,
+                            'midi': note_midi,
+                            'name': note_name(note_midi),
+                            'velocity': msg[2],
+                        }
+                        state['segment'].add(event, hand)
+                        finger = event.get('finger')
+                        flabel = FINGER_NAMES.get(finger, '?') if finger else '?'
+                        note_lines.append(
+                            f"  ♪ {note_name(note_midi):<4} {hand[0].upper()}H  "
+                            f"finger:{flabel:<8}  t:{note_time:8.0f}ms"
+                        )
+                        note_publishes.append(
+                            (dict(event), hand, state['segment'].scale_name or 'unknown')
+                        )
+
+                # All I/O outside the lock: terminal writes and queue puts are non-blocking
+                for line in note_lines:
+                    print(line)
+                for (ev_dict, hand, scale_name), line in zip(note_publishes, note_lines):
+                    _pub_q.put(('note', (ev_dict, hand, scale_name, session_id)))
+                    _emit('note_played', note=ev_dict['name'], hand=hand,
+                          finger=ev_dict.get('finger'), scale=scale_name)
+
+                reset_gap_timer()
+
+            midi_in.set_callback(callback)
+
+            # ── Wait for session end (A0, timer expiry, or Ctrl+C) ────────────
+            deadline = start_time + max_minutes * 60
+            try:
+                while not stop_event.is_set():
+                    remaining = deadline - time.perf_counter()
+                    if remaining <= 0:
+                        print("\n  [Timer expired — ending session...]")
+                        _emit('session_ended', segments=state['seg_count'])
+                        break
+                    stop_event.wait(timeout=min(0.5, remaining))
+            except KeyboardInterrupt:
+                _emit('session_ended', segments=state['seg_count'])
+
+            # ── Session cleanup ────────────────────────────────────────────────
+            if state['gap_timer']:
+                state['gap_timer'].cancel()
+
+            # Process any final segment, then flush pending HEC posts (max 10s)
+            process_and_reset()
+            _pub_q.put(None)                    # poison pill
+            _pub_thread.join(timeout=10)        # don't hang if Splunk is slow
+            print(f"\nSession complete. {state['seg_count']} segment(s) saved to data/sessions/")
+
+            # ── Coaching ───────────────────────────────────────────────────────
+            if summary_mode and state['scales_played']:
+                if post_analyzing_notice and os.environ.get('WEBEX_ROOM_ID'):
+                    post_analyzing_notice(state['scales_played'])
+                # Brief pause to let HEC events index in Splunk before MCP queries
+                time.sleep(3)
+                _run_session_summary(session_id, state['scales_played'])
+
+            # Loop back to listening mode for next session
+
     except KeyboardInterrupt:
         pass
-
-    if state['gap_timer']:
-        state['gap_timer'].cancel()
-    midi_in.close_port()
-
-    # Process any final segment, then flush pending HEC posts (max 10s)
-    process_and_reset()
-    _pub_q.put(None)                    # poison pill
-    _pub_thread.join(timeout=10)        # don't hang forever if Splunk is slow
-    publisher.disconnect()
-    print(f"\nSession complete. {state['seg_count']} segment(s) saved to data/sessions/")
-
-    # Summary coaching: one card per scale-type at session end
-    if summary_mode and state['scales_played']:
-        if post_analyzing_notice and os.environ.get('WEBEX_ROOM_ID'):
-            post_analyzing_notice(state['scales_played'])
-        # Brief pause to let HEC events index in Splunk before MCP queries
-        time.sleep(3)
-        _run_session_summary(session_id, state['scales_played'])
+    finally:
+        midi_in.close_port()
+        publisher.disconnect()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

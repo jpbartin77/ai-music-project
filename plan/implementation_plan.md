@@ -1,5 +1,5 @@
 # AI Music Project — Implementation Plan
-*Updated: April 25, 2026*
+*Updated: April 26, 2026*
 
 ---
 
@@ -29,7 +29,10 @@ Two goals running in parallel:
 | AI coach agent | `src/coach_agent.py` | ✅ Complete — tested live |
 | Webex Adaptive Card delivery | `src/webex_delivery.py` | ✅ Complete — confirmed rendering |
 | Session-end coach trigger | `src/practice_session.py` | ✅ Wired — untested end-to-end |
-| Test scale simulator | `tools/send_test_scale.py` | ✅ Complete |
+| Test scale simulator | `tools/send_test_scale.py` | ✅ Complete — upgraded with demo events + Reaper MIDI |
+| MIDI recording tool | `tools/record_test_scale.py` | ✅ Complete — real C-major fixture captured |
+| Animated demo dashboard | `src/demo_server.py` | ✅ Complete — Flask SSE, SVG pipeline, full node state machine |
+| Demo event emitter | `src/demo_emitter.py` | ✅ Complete — fire-and-forget HTTP, opt-in via DEMO_SERVER_URL |
 | MCP smoke test | `tools/test_mcp_tools.py` | ✅ Complete |
 
 ---
@@ -59,11 +62,19 @@ Everything runs on the workstation. No tunnels. No cloud dependencies except Web
 
 ### Remaining Work
 
-#### P1.1 — End-to-End Pipeline Test
+#### P1.1 — End-to-End Pipeline Test ✅ (mostly complete)
 - ✅ `tools/send_test_scale.py` → events confirmed in Splunk
-- [ ] `tools/test_mcp_tools.py` → confirm MCP tools query Splunk correctly
-- [ ] Full pipeline: play a scale → Webex coaching card arrives
-- [ ] Fix `get_finger_trends` SPL deviation values (uses cumulative time vs. session mean — misleading; rewrite to use IOI-based deviation per segment)
+- ✅ Full pipeline working: play a scale → coaching → Webex card arrives
+- ✅ `get_finger_trends` SPL deviation fix (IOI-based)
+- ✅ Demo dashboard animates full pipeline end-to-end
+- ✅ C8 listening mode — press top key to start session, A0 to end
+- [ ] `tools/test_mcp_tools.py` → confirm MCP tools query Splunk correctly (smoke test)
+
+#### P1.4 — Demo Rehearsal Path ✅
+- ✅ `record_test_scale.py` captures real playing to JSON fixture
+- ✅ `send_test_scale.py --reaper --midi-port "TestScale" --no-coach` replays through Reaper VST + dashboard
+- [ ] Verify notes play through Reaper VST end-to-end (TestScale port wired, not yet confirmed)
+- [ ] Run full rehearsal: dashboard + audio + simulated coaching
 
 #### P1.2 — Cloud Splunk
 The longitudinal coaching story ("your ring finger has been consistently late for 3 weeks") requires persistent data. dCloud rotates weekly and wipes all history.
@@ -75,6 +86,19 @@ The longitudinal coaching story ("your ring finger has been consistently late fo
 | Splunk Free on GCP VM | ~$10–20/mo | Persistent, internet-reachable, free tier forever |
 
 **Decision pending.** Once resolved: update `SPLUNK_URL`, `SPLUNK_HEC_URL`, and their 1Password entries. Everything else unchanged.
+
+#### P1.5 — Demo Script / Narrative
+Write a 5-minute script:
+1. "I used my piano as a sensor network" — the setup
+2. C8 to start, live notes appear in sidebar
+3. A0 → watch the pipeline fire: Coaching Skill, MCP, charts, Webex in sequence
+4. Coach card arrives in Webex — show card + chart
+5. Close: "same patterns I use at work — agent, skill, MCP, tools"
+
+Key talking point — Coaching Skill (purple node): "Not a separate file — it's the role
+coach_agent.py plays. Discrete input: session_id + scale. Discrete output: coaching report.
+In a larger system this would be a formal subagent. Here it's the conceptual boundary between
+gathering data and thinking about it."
 
 #### P1.3 — Pre-Record Demo Sessions
 Once pipeline is stable, record 5–10 real practice sessions:

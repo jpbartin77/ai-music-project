@@ -17,6 +17,9 @@ SPLUNK_INDEX=edge_hub_mqtt
 MQTT_HOST=198.18.133.101
 MQTT_PORT=1883
 
+# Demo dashboard — leave blank to disable; set to http://localhost:5000 to enable
+# DEMO_SERVER_URL=http://localhost:5000
+
 # Behavioral toggles are intentionally NOT set here.
 # `op run --env-file=...` injects values from this file OVER the parent shell env,
 # so any toggles set here would override what you tried to set in PowerShell.
