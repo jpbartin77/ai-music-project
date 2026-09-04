@@ -1,5 +1,7 @@
 # AI Music Project — Claude Context
 
+> **Status (2026-09-04): reference only.** This project served two April 2026 presentations and is no longer under active development. The code, notes, and architecture are kept as a working reference for the piano-as-sensor-network pattern (MIDI → Splunk HEC → MCP → Claude coach → Webex card). dCloud addresses and tokens referenced here are stale.
+
 ## Purpose
 
 Piano practice as a sensor network and AI coaching lab. The project captures live MIDI from a piano, computes session metrics (speed, evenness, per-finger timing), ships them to Splunk, and triggers an AI coach (Claude) that returns structured feedback via Webex Adaptive Cards.
